@@ -40,7 +40,7 @@ def runOrbSlam3(slam_exe, vocab, settings, input_arg):
     Uses subprocess.run (blocking). Call me inside a Thread to keep main thread free.
     """
     root   = _slam_root_from_exe(slam_exe)
-    exe_abs = os.path.abspath(slam_exe)  # absolute path avoids "file not found"
+    exe_abs = os.path.abspath(slam_exe)
     exe_rel = _exe_rel_from_root(slam_exe)
 
     # Build PATH for child process (prepend DLL search dirs)
@@ -207,9 +207,7 @@ def moveToExit(drone, exits):
     origin = (0.0, 0.0)
     maxDist, target = -1.0, None
     for e in exits:
-        dx = e[0] - origin[0]
-        dy = e[1] - origin[1]
-        d = sqrt(dx*dx + dy*dy)
+        d = distanceBetween2Points(e, origin)
         if d > maxDist:
             maxDist, target = d, e
     if target is None:
@@ -220,10 +218,10 @@ def moveToExit(drone, exits):
     heading_deg = (degrees(atan2(y, x)) + 360.0) % 360.0
     print(f"Target exit {target}, heading {heading_deg:.1f}°, distance {maxDist:.3f} [SLAM units]")
 
-    # Make sure we're actually flying
-    ensure_airborne(drone)
+    #ensure_airborne(drone)
 
-    # rotate clockwise by heading (Tello uses CW degrees)
+    # rotate clockwise by heading
+
     try:
         drone.rotate_clockwise(int(round(heading_deg)))
     except Exception as e:

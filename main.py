@@ -1,4 +1,5 @@
 import os
+import sys
 from json import load
 from time import sleep
 from threading import Thread
@@ -44,14 +45,15 @@ def drone_scan_with_slam(cfg, input_arg):
     source    = cfg["source"].lower()
     csv_path  = csv_path_from_config(cfg)
 
-    # Config knobs
-    streamon_delay   = float(cfg.get("streamon_delay_sec", 2.0))
-    slam_start_wait  = float(cfg.get("slam_start_wait_s", 10.0))  # <- HARD 10s wait you asked for
-    rotation_step    = int(cfg.get("rotation_step_deg", 10))      # smoother rotation in small steps
-    rotation_pause   = float(cfg.get("rotation_pause_s", 0.8))    # pause between steps
-    target_height    = int(cfg.get("height", 80))
-    speed            = int(cfg.get("speed", 10))
+    #get from config
+    streamon_delay = float(cfg["streamon_delay_sec"])
+    slam_start_wait = float(cfg["slam_start_wait_s"])
+    rotation_step = int(cfg["rotation_step_deg"])
+    rotation_pause = float(cfg["rotation_pause_s"])
+    target_height = int(cfg["height"])
+    speed = int(cfg["speed"])
 
+    # prepare orb slam and print
     root_dir = slam_root_from_exe(slam_exe)
     exe_rel  = os.path.join("x64", "Release", "slam.exe")
     print(f'cd {root_dir}')
@@ -69,20 +71,20 @@ def drone_scan_with_slam(cfg, input_arg):
     drone.connect()
     drone.set_speed(speed)
 
-    # Start Tello camera stream FIRST (helps SLAM/OBS sources)
+    # Start Tello camera stream (before flying....)
     tello_prepare_stream(drone, streamon_delay)
 
     # Start SLAM in background (blocking inside the thread)
     slam_thread = Thread(target=runOrbSlam3, args=(slam_exe, vocab, settings, input_arg), daemon=True)
     slam_thread.start()
 
-    # *** HARD, FIXED WAIT BEFORE ANY FLIGHT ACTIONS ***
+    # *** FIXED WAIT BEFORE ANY FLIGHT ACTIONS ***
     sleep(slam_start_wait)  # <-- do not fly before this finishes
 
-    # Smooth 360° scan (keep the drone airborne throughout)
+    # Smooth 360° scan NOT REALLY SMOOTH WE SHOULD FIX THIS
     drone.takeoff()
     try:
-        # trim altitude
+        # go to the target_height
         try:
             current_h = drone.get_height()
         except Exception:
@@ -92,7 +94,7 @@ def drone_scan_with_slam(cfg, input_arg):
         elif delta < 0: drone.move_down(-delta)
         sleep(0.5)
 
-        # slow, smooth rotation in small steps
+        # ROTATION
         rotated = 0
         while rotated < MAX_ANGLE:
             step = min(rotation_step, MAX_ANGLE - rotated)
@@ -100,15 +102,8 @@ def drone_scan_with_slam(cfg, input_arg):
             rotated += step
             sleep(rotation_pause)
 
-        # Stop SLAM by cutting the stream if we're using the UDP input (TELLO)
-        if str(input_arg).upper() == "TELLO":
-            try:
-                drone.streamoff()
-            except Exception:
-                pass
-        else:
-            # If SLAM is reading from a webcam index (OBS VirtualCam), send ESC to close it
-            press_esc_to_slam_window()
+        # Stop SLAM
+        press_esc_to_slam_window()
 
         # Wait for SLAM to finish writing outputs
         slam_thread.join()
@@ -127,11 +122,9 @@ if __name__ == '__main__':
     source = cfg["source"].lower()
 
     if source == "tello":
-        tello_mode = cfg.get("tello_input_mode", "udp").lower()   # "udp" or "webcam"
+        tello_mode = cfg.get("tello_input_mode", "udp").lower()   # udp (we dont use it)
         if tello_mode == "webcam":
             input_arg = str(cfg.get("tello_webcam_index", "0"))   # OBS VirtualCam index
-        else:
-            input_arg = "TELLO"
     elif source == "webcam":
         input_arg = str(cfg.get("webcam_index", "0"))
     else:
@@ -158,7 +151,7 @@ if __name__ == '__main__':
     # 3) Process map
     x, y, z = readCSV(csv_path)
     if len(x) == 0:
-        print("SLAM produced 0 points. Nothing to process.")
+        print("----SLAM produced 0 points. Nothing to process.----")
         if drone is not None:
             safe_land(drone); drone.end()
         raise SystemExit(0)
@@ -186,14 +179,15 @@ if __name__ == '__main__':
         print("No exits detected. Done.")
         if drone is not None:
             safe_land(drone); drone.end()
+        sys.exit(0)
+
+    if drone is not None:
+        try:
+            ensure_airborne(drone)      # in case motors timed out
+            moveToExit(drone, centers)  # rotate & fly forward
+        finally:
+            safe_land(drone)
+            drone.end()
     else:
-        if drone is not None:
-            try:
-                ensure_airborne(drone)      # in case motors timed out
-                moveToExit(drone, centers)  # rotate & fly forward
-            finally:
-                safe_land(drone)
-                drone.end()
-        else:
-            plot2DWithClustersCenters(inX, inZ, centers)
-            print("Exits (cluster centers):", centers)
+        plot2DWithClustersCenters(inX, inZ, centers)
+        print("Exits (cluster centers):", centers)
