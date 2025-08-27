@@ -4,18 +4,27 @@
   "settings": "C:\\ORB_SLAM3_Windows\\Examples\\Monocular\\telloCal.yaml",
 
   "source": "tello",
+
   "tello_input_mode": "webcam",
   "tello_webcam_index": "0",
   "webcam_index": "0",
   "video_path": "C:\\path\\to\\video.mp4",
 
   "speed": 10,
-  "height": 140,
+  "height": 60,
+
   "rotation_step_deg": 10,
-  "rotation_pause_s": 2,
+  "rotation_pause_s": 2.0,
   "streamon_delay_sec": 5.0,
   "slam_start_wait_s": 25.0,
   "slam_exit_wait_s": 15.0,
+
+  "do_nudge": true,
+  "nudge_cm": 20,
+  "nudge_every_steps": 2,
+
+  "plots_dir": "DebugPlots",
+  "telemetry_csv": "C:\\ORB_SLAM3_Windows\\log\\telemetry.csv",
 
   "voxel_size": 0.05,
   "nb_neighbors": 20,

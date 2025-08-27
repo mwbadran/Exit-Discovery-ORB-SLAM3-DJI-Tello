@@ -23,7 +23,7 @@ def getAverageRectangle(x, y):
 
     return (xLeft, yDown), (xRight, yDown), (xRight, yUp), (xLeft, yUp)
 
-# The rest (findBestBoundingBox, etc.) is kept for reference but unused.
+# The rest retained for reference (unused by pipeline)
 def splitIntoSubarrays(array, k):
     start = 0; subs = []
     if k <= 0: k = 1
