@@ -4,17 +4,17 @@
   "settings": "C:\\ORB_SLAM3_Windows\\Examples\\Monocular\\telloCal.yaml",
 
   "source": "tello",
-  "tello_input_mode": "udp",
+  "tello_input_mode": "webcam",
   "tello_webcam_index": "0",
   "webcam_index": "0",
   "video_path": "C:\\path\\to\\video.mp4",
 
   "speed": 10,
-  "height": 80,
+  "height": 140,
   "rotation_step_deg": 10,
-  "rotation_pause_s": 0.8,
-  "streamon_delay_sec": 2.0,
-  "slam_start_wait_s": 10.0,
+  "rotation_pause_s": 1.0,
+  "streamon_delay_sec": 5.0,
+  "slam_start_wait_s": 25.0,
 
   "voxel_size": 0.05,
   "nb_neighbors": 20,

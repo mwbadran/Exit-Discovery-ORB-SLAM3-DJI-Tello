@@ -33,22 +33,16 @@ def _auto_opencv_bins(root: str):
 # ---------- launch ORB-SLAM3 (blocking in current thread) ----------
 
 def runOrbSlam3(slam_exe, vocab, settings, input_arg):
-    """
-    Launch ORB-SLAM3 from the project root, exactly like:
-        cd <root>
-        .\\x64\\Release\\slam.exe mono_video <vocab> <settings> <input>
-    Uses subprocess.run (blocking). Call me inside a Thread to keep main thread free.
-    """
+    """Launch ORB-SLAM3 and return a Popen handle (non-blocking)."""
     root   = _slam_root_from_exe(slam_exe)
     exe_abs = os.path.abspath(slam_exe)
-    exe_rel = _exe_rel_from_root(slam_exe)
 
-    # Build PATH for child process (prepend DLL search dirs)
     env = os.environ.copy()
-    path_parts = []
-    path_parts.append(os.path.dirname(exe_abs))             # slam.exe dir
-    path_parts.append(os.path.join(root, "bin"))            # optional local bin
-    path_parts.extend(_auto_opencv_bins(root))              # OpenCV bins
+    path_parts = [
+        os.path.dirname(exe_abs),
+        os.path.join(root, "bin"),
+        *(_auto_opencv_bins(root))
+    ]
     extra = env.get("ORB3_EXTRA_DLL_DIRS", "")
     if extra:
         for p in extra.split(";"):
@@ -58,15 +52,25 @@ def runOrbSlam3(slam_exe, vocab, settings, input_arg):
     env["PATH"] = os.pathsep.join(path_parts + [env.get("PATH", "")])
 
     print("Running from root:", root)
-    print("Command:", f'{exe_rel} mono_video "{vocab}" "{settings}" "{input_arg}"')
+    print("Command:", f'{os.path.join("x64","Release","slam.exe")} mono_video "{vocab}" "{settings}" "{input_arg}"')
 
-    cmd = [exe_abs, "mono_video", vocab, settings, input_arg]
+    # NEW: return process handle
+    CREATE_NEW_PROCESS_GROUP = 0x00000200 if os.name == "nt" else 0
+    return subprocess.Popen(
+        [exe_abs, "mono_video", vocab, settings, input_arg],
+        cwd=root, env=env, creationflags=CREATE_NEW_PROCESS_GROUP
+    )
+
+def close_slam(proc, input_arg, drone=None, wait_s=15.0):
+    """Gracefully close ORB-SLAM3, with UDP and ESC strategies and a timeout."""
+    if proc is None:
+        return
+
     try:
-        subprocess.run(cmd, cwd=root, env=env, check=False)
-    except FileNotFoundError as e:
-        print("Failed to start SLAM (FileNotFoundError):", e)
-    except Exception as e:
-        print("Failed to start SLAM:", e)
+        proc.terminate()
+        proc.wait(timeout=3.0)
+    except subprocess.TimeoutExpired:
+        proc.kill()
 
 # ---------- try to stop SLAM window (webcam mode) ----------
 

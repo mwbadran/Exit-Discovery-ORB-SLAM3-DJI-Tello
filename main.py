@@ -59,11 +59,12 @@ def drone_scan_with_slam(cfg, input_arg):
     print(f'cd {root_dir}')
     print(f'.\\{exe_rel} mono_video "{vocab}" "{settings}" "{input_arg}"')
 
+    # Start SLAM (now returns a process handle)
+    slam_proc = runOrbSlam3(slam_exe, vocab, settings, input_arg)
+
     if source != "tello":
-        # Non-drone path: just run SLAM and wait for it to finish externally
-        slam_thread = Thread(target=runOrbSlam3, args=(slam_exe, vocab, settings, input_arg), daemon=True)
-        slam_thread.start()
-        slam_thread.join()
+        # Webcam/video: just wait for SLAM to end elsewhere (e.g., ESC)
+        slam_proc.wait()
         return csv_path, None
 
     # ---- Tello path ----
@@ -71,30 +72,27 @@ def drone_scan_with_slam(cfg, input_arg):
     drone.connect()
     drone.set_speed(speed)
 
-    # Start Tello camera stream (before flying....)
+    # Start Tello camera stream (before flying)
     tello_prepare_stream(drone, streamon_delay)
 
-    # Start SLAM in background (blocking inside the thread)
-    slam_thread = Thread(target=runOrbSlam3, args=(slam_exe, vocab, settings, input_arg), daemon=True)
-    slam_thread.start()
+    # *** EXACT 10s wait before any flight ***
+    sleep(slam_start_wait)
 
-    # *** FIXED WAIT BEFORE ANY FLIGHT ACTIONS ***
-    sleep(slam_start_wait)  # <-- do not fly before this finishes
-
-    # Smooth 360° scan NOT REALLY SMOOTH WE SHOULD FIX THIS
+    # Perform the 360 scan (your current stepwise rotation)
     drone.takeoff()
     try:
-        # go to the target_height
+        # altitude trim...
         try:
             current_h = drone.get_height()
         except Exception:
             current_h = 0
         delta = int(target_height - current_h)
-        if   delta > 0: drone.move_up(delta)
-        elif delta < 0: drone.move_down(-delta)
+        if delta > 0:
+            drone.move_up(delta)
+        elif delta < 0:
+            drone.move_down(-delta)
         sleep(0.5)
 
-        # ROTATION
         rotated = 0
         while rotated < MAX_ANGLE:
             step = min(rotation_step, MAX_ANGLE - rotated)
@@ -102,14 +100,13 @@ def drone_scan_with_slam(cfg, input_arg):
             rotated += step
             sleep(rotation_pause)
 
-        # Stop SLAM
-        press_esc_to_slam_window()
-
-        # Wait for SLAM to finish writing outputs
-        slam_thread.join()
+        # Auto-close SLAM cleanly
+        close_slam(slam_proc, input_arg, drone=drone, wait_s=15.0)
 
     except Exception as e:
         print("Scan error:", e)
+        # Try to close anyway
+        close_slam(slam_proc, input_arg, drone=drone, wait_s=8.0)
 
     # Keep flying; caller will compute exit and move now
     return csv_path, drone
