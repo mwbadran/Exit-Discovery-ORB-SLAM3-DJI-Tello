@@ -30,11 +30,11 @@ def _auto_opencv_bins(root: str):
         candidates.append(os.path.join(root, "3rdparty", "opencv", "build", "x64", vc, "bin"))
     return _maybe_dirs(*candidates)
 
-# ---------- launch ORB-SLAM3 (blocking in current thread) ----------
+# ---------- launch ORB-SLAM3 (non-blocking) ----------
 
 def runOrbSlam3(slam_exe, vocab, settings, input_arg):
     """Launch ORB-SLAM3 and return a Popen handle (non-blocking)."""
-    root   = _slam_root_from_exe(slam_exe)
+    root    = _slam_root_from_exe(slam_exe)
     exe_abs = os.path.abspath(slam_exe)
 
     env = os.environ.copy()
@@ -54,25 +54,13 @@ def runOrbSlam3(slam_exe, vocab, settings, input_arg):
     print("Running from root:", root)
     print("Command:", f'{os.path.join("x64","Release","slam.exe")} mono_video "{vocab}" "{settings}" "{input_arg}"')
 
-    # NEW: return process handle
     CREATE_NEW_PROCESS_GROUP = 0x00000200 if os.name == "nt" else 0
     return subprocess.Popen(
         [exe_abs, "mono_video", vocab, settings, input_arg],
         cwd=root, env=env, creationflags=CREATE_NEW_PROCESS_GROUP
     )
 
-def close_slam(proc, input_arg, drone=None, wait_s=15.0):
-    """Gracefully close ORB-SLAM3, with UDP and ESC strategies and a timeout."""
-    if proc is None:
-        return
-
-    try:
-        proc.terminate()
-        proc.wait(timeout=3.0)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-
-# ---------- try to stop SLAM window (webcam mode) ----------
+# ---------- graceful close for SLAM ----------
 
 _user32 = ctypes.windll.user32 if os.name == "nt" else None
 WM_KEYDOWN, WM_KEYUP = 0x0100, 0x0101
@@ -84,8 +72,7 @@ def _post_key(hwnd, vk):
 
 def press_esc_to_slam_window():
     """
-    Best-effort: bring the OpenCV/SLAM window to foreground and send ESC
-    so SLAM can exit cleanly when using a webcam index input.
+    Best-effort: send ESC to the SLAM window (webcam input mode).
     """
     if _user32 is None:
         return False
@@ -103,7 +90,7 @@ def press_esc_to_slam_window():
             sleep(0.2)
             return True
 
-    # Fallback: send ESC globally (active window)
+    # Fallback: send ESC to active window
     try:
         _user32.keybd_event(VK_ESCAPE, 0, 0, 0)
         _user32.keybd_event(VK_ESCAPE, 0, 2, 0)  # KEYEVENTF_KEYUP = 2
@@ -111,6 +98,49 @@ def press_esc_to_slam_window():
         return True
     except Exception:
         return False
+
+def close_slam(proc, input_arg, drone=None, wait_s=15.0):
+    """
+    Close ORB-SLAM3 cleanly:
+      - If input_arg == 'TELLO' (UDP): stop Tello stream to end SLAM main loop, then wait.
+      - Else (webcam/video): send ESC to the window, then wait.
+    Only if it *still* won't exit, terminate/kill as a last resort.
+    """
+    if proc is None:
+        return
+
+    # UDP (Tello) path → stop stream to end SLAM loop
+    if str(input_arg).upper() == "TELLO":
+        if drone is not None:
+            try:
+                drone.streamoff()
+            except Exception:
+                pass
+        try:
+            proc.wait(timeout=wait_s)
+            return
+        except subprocess.TimeoutExpired:
+            # Try ESC too, just in case a window is open
+            press_esc_to_slam_window()
+
+    else:
+        # Webcam/video: trigger graceful exit with ESC
+        press_esc_to_slam_window()
+        try:
+            proc.wait(timeout=wait_s)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+
+    # Gentle terminate, then kill if necessary
+    try:
+        proc.terminate()
+        proc.wait(timeout=3.0)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+        except Exception:
+            pass
 
 # ---------- geometry / clustering ----------
 
@@ -222,10 +252,7 @@ def moveToExit(drone, exits):
     heading_deg = (degrees(atan2(y, x)) + 360.0) % 360.0
     print(f"Target exit {target}, heading {heading_deg:.1f}°, distance {maxDist:.3f} [SLAM units]")
 
-    #ensure_airborne(drone)
-
-    # rotate clockwise by heading
-
+    # Rotate to face the exit
     try:
         drone.rotate_clockwise(int(round(heading_deg)))
     except Exception as e:
@@ -236,8 +263,8 @@ def moveToExit(drone, exits):
         except Exception as e2:
             print("Rotate retry failed:", e2)
 
-    # scale SLAM units to cm (empirical; adjust for your setup)
-    scale_cm = 160.0  # 1 SLAM unit ≈ 1.6 m (tune for your environment)
+    # Convert SLAM distance to centimeters (tune this!)
+    scale_cm = 160.0  # 1 SLAM unit ≈ 1.6 m
     distance_cm = int(round(maxDist * scale_cm))
     print("Move forward (cm):", distance_cm)
 
