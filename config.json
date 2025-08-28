@@ -32,18 +32,12 @@
   "thresh": 1.5,
 
   "wsl_mode": true,
-
   "wsl_distro_unc": "Ubuntu-20.04",
   "wsl_repo_dir": "/home/mwbadran/dev/ORB_SLAM3",
   "wsl_slam_binary": "./Examples/Monocular/mono_tello",
-
-  "wsl_settings_rel": "Examples/Monocular/telloCal.yaml",
   "wsl_vocab_rel": "Vocabulary/ORBvoc.txt",
-
+  "wsl_settings_rel": "Examples/Monocular/TUM1.yaml",
   "forward_port": 11111,
-  "pangolin_headless": true,
-
-  "udp_url_params": "fifo_size=500000&overrun_nonfatal=1&timeout=3000000",
 
   "wsl_unc_root": "\\\\wsl.localhost\\Ubuntu-20.04\\home\\mwbadran\\dev\\ORB_SLAM3",
   "wsl_point_csv": "\\\\wsl.localhost\\Ubuntu-20.04\\home\\mwbadran\\dev\\ORB_SLAM3\\log\\pointData.csv"

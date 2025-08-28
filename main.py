@@ -12,7 +12,7 @@ from djitellopy import Tello
 from plot import *
 from ExitFinding import *
 from PointCloudCleaning import *
-from utils import *  # uses close_slam(), readCSV(), makeCloud(), etc.  (see your utils.py)  # :contentReference[oaicite:0]{index=0}
+from utils import *
 
 MAX_ANGLE = 360
 
@@ -30,7 +30,6 @@ def slam_root_from_exe(exe_path: str) -> str:
 
 
 def csv_path_from_config(cfg):
-    # WSL: read CSV via UNC; Windows legacy: from repo\log
     if cfg.get("wsl_mode"):
         return cfg["wsl_point_csv"]
     root_dir = slam_root_from_exe(cfg["slam_exe"])
@@ -96,36 +95,26 @@ class UDPForwarder(threading.Thread):
 
 def detect_wsl_ip() -> str:
     """
-    Query WSL for its current IPv4 (first token of `hostname -I`) using the `wsl` bridge.
+    Query WSL for its current IPv4 (first token of `hostname -I`).
+    Works from Windows by invoking `wsl`.
     """
     try:
         res = subprocess.run(
             ["wsl", "hostname", "-I"],
             capture_output=True, text=True, check=True
         )
+        # hostname -I may return multiple addresses; take the first IPv4-like token
         tokens = res.stdout.strip().split()
         for t in tokens:
-            if t.count(".") == 3:
+            if t.count(".") == 3:  # naive IPv4 check
                 return t
     except Exception as e:
         print("[WSL] unable to detect IP:", e)
+    # fallback to a common default; user can still edit config if needed
     return "172.30.0.1"
 
 
-# -------------------- WSL helpers --------------------
-
-def wsl_run(cmd: str, print_cmd=False, capture=False):
-    if print_cmd:
-        print('[WSL] bash -lc "{}"'.format(cmd))
-    if capture:
-        return subprocess.run(["wsl", "bash", "-lc", cmd], text=True, capture_output=True)
-    return subprocess.run(["wsl", "bash", "-lc", cmd])
-
-
-def ensure_port_free_in_wsl(port: int):
-    # Kill any process in WSL that is bound to this UDP port
-    wsl_run(f"fuser -k {port}/udp 2>/dev/null || true")
-
+# -------------------- WSL SLAM launcher --------------------
 
 def build_wsl_slam_command(cfg) -> str:
     repo = cfg["wsl_repo_dir"].rstrip("/")
@@ -133,20 +122,14 @@ def build_wsl_slam_command(cfg) -> str:
     vocab_rel = cfg.get("wsl_vocab_rel", "Vocabulary/ORBvoc.txt")
     settings_rel = cfg.get("wsl_settings_rel", "Examples/Monocular/TUM1.yaml")
     port = int(cfg.get("forward_port", 11111))
-    headless = cfg.get("pangolin_headless", True)
-
-    env = ""
-    if headless:
-        # make Pangolin run without a window / EGL
-        env = "export PANGOLIN_WINDOW_URI=headless://; "
-
-    # FFmpeg-style input for ORB-SLAM3: "udp://@:PORT"
-    return f"{env}cd {repo} && {slam_bin} {vocab_rel} {settings_rel} \"udp://@:{port}\""
+    # We pass the FFmpeg-style input to ORB-SLAM3: "udp://@:PORT"
+    return f"cd {repo} && {slam_bin} {vocab_rel} {settings_rel} \"udp://@:{port}\""
 
 
 def launch_wsl_slam(cfg):
     """
     Launch ORB-SLAM3 inside WSL and return the Popen handle.
+    We rely on `wsl` command preinstalled on Windows.
     """
     cmd = build_wsl_slam_command(cfg)
     print("[WSL] launching ORB-SLAM3:\n    wsl bash -lc \"{}\"".format(cmd))
@@ -161,12 +144,12 @@ def launch_wsl_slam(cfg):
         return None
 
 
-def drain_proc_output(proc, tag="[WSL]", lines=12):
-    """Print a small burst of lines to show WSL progress."""
+def drain_proc_output(proc, tag="[WSL]"):
+    """Non-blocking-ish drain: print a few lines to show progress."""
     if proc is None or proc.stdout is None:
         return
     try:
-        for _ in range(lines):
+        for _ in range(8):  # just a small burst so we don't block
             line = proc.stdout.readline()
             if not line:
                 break
@@ -202,61 +185,10 @@ def append_telemetry(row_dict: dict, path: str):
 
 # -------------------- main mission --------------------
 
-def try_launch_wsl_slam_with_port_handling(cfg, fwd_port):
-    """
-    Ensure UDP port is free in WSL, launch SLAM, and if we detect 'bind failed',
-    clear the port and retry once.
-    """
-    ensure_port_free_in_wsl(fwd_port)
-    proc = launch_wsl_slam(cfg)
-    sleep(0.5)
-    drain_proc_output(proc, lines=10)
-
-    # quick scan for bind failure
-    failed = False
-    try:
-        if proc and proc.stdout:
-            # non-blocking peek
-            proc.stdout.flush()
-    except Exception:
-        pass
-
-    # crude: fetch one more burst and look for errors
-    buf = []
-    try:
-        for _ in range(6):
-            line = proc.stdout.readline()
-            if not line:
-                break
-            buf.append(line)
-            if "bind failed" in line or "cannot open input" in line:
-                failed = True
-    except Exception:
-        pass
-
-    if buf:
-        for ln in buf:
-            print("[WSL]", ln.rstrip())
-
-    if failed:
-        print(f"[WSL] Detected UDP bind error. Freeing port {fwd_port} and retrying once...")
-        ensure_port_free_in_wsl(fwd_port)
-        try:
-            proc.terminate()
-        except Exception:
-            pass
-        sleep(0.5)
-        proc = launch_wsl_slam(cfg)
-        sleep(0.5)
-        drain_proc_output(proc, lines=10)
-
-    return proc
-
-
 def drone_scan_with_slam(cfg, input_arg):
     """
     Full pipeline:
-      - start WSL ORB-SLAM3 (mono_tello) headless and free UDP port
+      - start WSL ORB-SLAM3 (mono_tello) via `wsl`
       - auto-start UDP forwarder to WSL IP
       - connect & fly Tello 360° scan with nudges
       - stop stream -> let SLAM exit -> stop forwarder
@@ -285,14 +217,16 @@ def drone_scan_with_slam(cfg, input_arg):
     # 0) Start WSL ORB-SLAM3 and UDP forwarder (only in wsl_mode)
     slam_proc = None
     fwd = None
+    wsl_ip = None
     if cfg.get("wsl_mode"):
         wsl_ip = detect_wsl_ip()
         fwd = UDPForwarder(wsl_ip, fwd_port)
         fwd.start()
-
-        slam_proc = try_launch_wsl_slam_with_port_handling(cfg, fwd_port)
+        slam_proc = launch_wsl_slam(cfg)
+        # give mono_tello a head start and show some logs
+        drain_proc_output(slam_proc)
     else:
-        # legacy Windows SLAM path (uses utils.runOrbSlam3)  :contentReference[oaicite:1]{index=1}
+        # legacy Windows SLAM path
         print("[LEGACY] launching Windows slam.exe")
         slam_proc = runOrbSlam3(slam_exe, vocab, settings, input_arg)
 
@@ -314,7 +248,7 @@ def drone_scan_with_slam(cfg, input_arg):
 
     print(f"[INFO] Waiting {slam_start_wait:.1f}s for ORB-SLAM3 to start...")
     sleep(slam_start_wait)
-    drain_proc_output(slam_proc, lines=8)
+    drain_proc_output(slam_proc)
 
     # 360° scan with nudges
     drone.takeoff()
@@ -381,9 +315,9 @@ def drone_scan_with_slam(cfg, input_arg):
                     }, telemetry_csv)
 
             sleep(rotation_pause)
-            drain_proc_output(slam_proc, lines=4)
+            drain_proc_output(slam_proc)
 
-        # 2) Close SLAM gracefully: stopping stream lets mono_tello exit (WSL path passes proc=None).  :contentReference[oaicite:2]{index=2}
+        # 2) Close SLAM gracefully: stopping stream lets mono_tello exit.
         close_slam(None, input_arg, drone=drone, wait_s=slam_exit_wait_s)
 
     except KeyboardInterrupt:
@@ -459,14 +393,14 @@ if __name__ == '__main__':
         raise SystemExit(1)
 
     # 3) process map
-    x, y, z = readCSV(csv_path)  # utils.readCSV  :contentReference[oaicite:3]{index=3}
+    x, y, z = readCSV(csv_path)
     if len(x) == 0:
         print("---- SLAM produced 0 points. Nothing to process. ----")
         if drone is not None:
             safe_land(drone); drone.end()
         raise SystemExit(0)
 
-    pcd = makeCloud(x, y, z)     # utils.makeCloud  :contentReference[oaicite:4]{index=4}
+    pcd = makeCloud(x, y, z)
 
     inlierPCD, outlierPCD = removeStatisticalOutlier(
         pcd,
@@ -474,10 +408,10 @@ if __name__ == '__main__':
         nb_neighbors=int(cfg["nb_neighbors"]),
         std_ratio=float(cfg["std_ratio"])
     )
-    inX, inY, inZ = pcdToArrays(inlierPCD)  # utils.pcdToArrays  :contentReference[oaicite:5]{index=5}
+    inX, inY, inZ = pcdToArrays(inlierPCD)
 
     # room rectangle from top-down (X,Z)
-    box = getAverageRectangle(inX, inZ)     # ExitFinding.getAverageRectangle
+    box = getAverageRectangle(inX, inZ)
 
     # plots
     plots_dir = cfg.get("plots_dir", "DebugPlots")
@@ -491,9 +425,9 @@ if __name__ == '__main__':
     plot3DPreview(inX, inY, inZ, save_path=os.path.join(plots_dir, f"cloud_preview_{tag}.png"),
                   title="3D Inlier Cloud (preview)")
 
-    xOut, zOut = pointsOutOfBox(inX, inZ, box)                   # utils.pointsOutOfBox  :contentReference[oaicite:7]{index=7}
-    clusters = hierarchicalClustering(xOut, zOut, float(cfg["thresh"]))   # utils.hierarchicalClustering  :contentReference[oaicite:8]{index=8}
-    centers  = getClustersCenters(clusters)                      # utils.getClustersCenters  :contentReference[oaicite:9]{index=9}
+    xOut, zOut = pointsOutOfBox(inX, inZ, box)
+    clusters = hierarchicalClustering(xOut, zOut, float(cfg["thresh"]))
+    centers  = getClustersCenters(clusters)
 
     # 4) navigate to exit (keep airborne)
     if len(centers) == 0:
@@ -511,10 +445,10 @@ if __name__ == '__main__':
 
     if drone is not None:
         try:
-            ensure_airborne(drone)      # utils.ensure_airborne
-            moveToExit(drone, centers)  # utils.moveToExit
+            ensure_airborne(drone)
+            moveToExit(drone, centers)
         finally:
-            safe_land(drone)            # utils.safe_land
+            safe_land(drone)
             drone.end()
     else:
         plot2DWithClustersCenters(inX, inZ, centers,
