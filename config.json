@@ -5,13 +5,13 @@
 
   "source": "tello",
 
-  "tello_input_mode": "webcam",
+  "tello_input_mode": "udp",
   "tello_webcam_index": "0",
   "webcam_index": "0",
   "video_path": "C:\\path\\to\\video.mp4",
 
   "speed": 10,
-  "height": 60,
+  "height": 120,
 
   "rotation_step_deg": 10,
   "rotation_pause_s": 2.0,
@@ -29,5 +29,22 @@
   "voxel_size": 0.05,
   "nb_neighbors": 20,
   "std_ratio": 1.0,
-  "thresh": 1.5
+  "thresh": 1.5,
+
+  "wsl_mode": true,
+
+  "wsl_distro_unc": "Ubuntu-20.04",
+  "wsl_repo_dir": "/home/mwbadran/dev/ORB_SLAM3",
+  "wsl_slam_binary": "./Examples/Monocular/mono_tello",
+
+  "wsl_settings_rel": "Examples/Monocular/telloCal.yaml",
+  "wsl_vocab_rel": "Vocabulary/ORBvoc.txt",
+
+  "forward_port": 11111,
+  "pangolin_headless": true,
+
+  "udp_url_params": "fifo_size=500000&overrun_nonfatal=1&timeout=3000000",
+
+  "wsl_unc_root": "\\\\wsl.localhost\\Ubuntu-20.04\\home\\mwbadran\\dev\\ORB_SLAM3",
+  "wsl_point_csv": "\\\\wsl.localhost\\Ubuntu-20.04\\home\\mwbadran\\dev\\ORB_SLAM3\\log\\pointData.csv"
 }
