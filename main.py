@@ -422,7 +422,10 @@ if __name__ == '__main__':
     inX, inY, inZ = pcdToArrays(inlierPCD)
 
     # room rectangle from top-down (X,Z)
-    box = getAverageRectangle(inX, inZ)
+    scale = float(cfg.get("avg_rect_scale", 1.2))  # 1.0–1.4
+    box = getAverageRectangle(inX, inZ, scale=scale)
+    #box = getRobustRoomBox(inX, inZ, q=0.05, margin=0.10)
+
 
     # plots
     plots_dir = cfg.get("plots_dir", "DebugPlots")

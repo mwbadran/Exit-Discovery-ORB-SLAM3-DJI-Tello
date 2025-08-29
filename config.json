@@ -19,10 +19,11 @@
   "nudge_every_steps": 2,
   "plots_dir": "DebugPlots",
   "telemetry_csv": "C:\\ORB_SLAM3_Windows\\log\\telemetry.csv",
-  "voxel_size": 0.05,
-  "nb_neighbors": 20,
-  "std_ratio": 1.0,
-  "thresh": 1.5,
+  "voxel_size": 0.03,
+  "nb_neighbors": 15,
+  "std_ratio": 1.5,
+  "thresh": 1.0,
+  "avg_rect_scale": 1.2,
   "wsl_mode": true,
   "wsl_distro_unc": "Ubuntu-20.04",
   "wsl_repo_dir": "/home/mwbadran/dev/ORB_SLAM3",
@@ -33,5 +34,5 @@
   "wsl_unc_root": "\\\\wsl.localhost\\Ubuntu-20.04\\home\\mwbadran\\dev\\ORB_SLAM3",
   "wsl_point_csv": "\\\\wsl.localhost\\Ubuntu-20.04\\home\\mwbadran\\dev\\ORB_SLAM3\\log\\pointData.csv",
   "wsl_slam_binary_video": "./Examples/Monocular/mono_input",
-  "wsl_video_path": "/mnt/c/Users/W10/Desktop/saree3.mp4"
+  "wsl_video_path": "/mnt/c/Users/W10/Desktop/ma3onSec.mp4"
 }
