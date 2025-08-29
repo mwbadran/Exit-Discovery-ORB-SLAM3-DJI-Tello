@@ -9,6 +9,9 @@ from pyntcloud import PyntCloud
 import scipy.cluster.hierarchy as hcluster
 import open3d as o3d
 
+from main import EXTRA_ANGLE
+
+
 # ---------- helpers for paths ----------
 
 def _slam_root_from_exe(slam_exe: str) -> str:
@@ -262,7 +265,7 @@ def moveToExit(drone, exits):
 
     # Rotate to face the exit
     try:
-        drone.rotate_clockwise(int(round(heading_deg)))
+        drone.rotate_clockwise(int(round(heading_deg +360.0 -EXTRA_ANGLE)) % 360.0)
     except Exception as e:
         print("Rotate failed:", e)
         ensure_airborne(drone)

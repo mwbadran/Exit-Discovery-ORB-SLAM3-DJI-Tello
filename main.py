@@ -14,7 +14,9 @@ from ExitFinding import *
 from PointCloudCleaning import *
 from utils import *
 
-MAX_ANGLE = 360
+EXTRA_ANGLE = 40
+MAX_ANGLE_WOUT_EXTRA = 360
+MAX_ANGLE = 400
 
 
 # -------------------- config helpers --------------------
@@ -359,6 +361,12 @@ def drone_scan_with_slam(cfg, input_arg):
 
 if __name__ == '__main__':
     cfg = loadConfig()
+
+    #get angles from config file:
+    EXTRA_ANGLE = cfg["extra_angle"]
+    MAX_ANGLE_WOUT_EXTRA = cfg["max_angle_wout_extra"]
+    MAX_ANGLE = MAX_ANGLE_WOUT_EXTRA + EXTRA_ANGLE
+
 
     # decide input arg (mainly relevant for legacy Windows)
     source = cfg["source"].lower()
