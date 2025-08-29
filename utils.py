@@ -9,7 +9,6 @@ from pyntcloud import PyntCloud
 import scipy.cluster.hierarchy as hcluster
 import open3d as o3d
 
-from main import EXTRA_ANGLE
 
 
 # ---------- helpers for paths ----------
@@ -244,10 +243,11 @@ def safe_land(drone):
         except Exception:
             sleep(0.5)
 
-def moveToExit(drone, exits):
+def moveToExit(drone, exits, extra_angle=0.0):
     """
     Choose the farthest exit and fly there.
     Uses atan2 for heading. Includes auto-retry if motors were off.
+    extra_angle: an additional clockwise rotation in degrees (from config).
     """
     origin = (0.0, 0.0)
     maxDist, target = -1.0, None
@@ -263,14 +263,15 @@ def moveToExit(drone, exits):
     heading_deg = (degrees(atan2(y, x)) + 360.0) % 360.0
     print(f"Target exit {target}, heading {heading_deg:.1f}°, distance {maxDist:.3f} [SLAM units]")
 
-    # Rotate to face the exit
+    # Rotate to face the exit (+ extra_angle from config)
+    desired = (heading_deg + float(extra_angle)) % 360.0
     try:
-        drone.rotate_clockwise(int(round(heading_deg +360.0 -EXTRA_ANGLE)) % 360.0)
+        drone.rotate_clockwise(int(round(desired)))
     except Exception as e:
         print("Rotate failed:", e)
         ensure_airborne(drone)
         try:
-            drone.rotate_clockwise(int(round(heading_deg)))
+            drone.rotate_clockwise(int(round(desired)))
         except Exception as e2:
             print("Rotate retry failed:", e2)
 
@@ -294,3 +295,4 @@ def moveToExit(drone, exits):
             except Exception as e2:
                 print("Move retry failed:", e2)
                 break
+

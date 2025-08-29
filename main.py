@@ -14,6 +14,7 @@ from ExitFinding import *
 from PointCloudCleaning import *
 from utils import *
 
+# real values are in config.json, these are just init
 EXTRA_ANGLE = 40
 MAX_ANGLE_WOUT_EXTRA = 360
 MAX_ANGLE = 400
@@ -49,7 +50,7 @@ class UDPForwarder(threading.Thread):
         super().__init__(daemon=True)
         self.wsl_ip = wsl_ip
         self.port = port
-        self._stop = threading.Event()
+        self._stop_evt = threading.Event()
         self.insock = None
         self.outsock = None
 
@@ -65,7 +66,7 @@ class UDPForwarder(threading.Thread):
 
             n = 0
             self.insock.settimeout(0.5)
-            while not self._stop.is_set():
+            while not self._stop_evt.is_set():
                 try:
                     data, src = self.insock.recvfrom(65536)
                 except socket.timeout:
@@ -92,7 +93,7 @@ class UDPForwarder(threading.Thread):
             print("[FWD] stopped.")
 
     def stop(self):
-        self._stop.set()
+        self._stop_evt.set()
 
 
 def detect_wsl_ip() -> str:
@@ -257,6 +258,13 @@ def drone_scan_with_slam(cfg, input_arg):
     drone.connect()
     drone.set_speed(speed)
 
+    try:
+        battery = drone.get_battery()
+        #voltage = drone.get_voltage()
+        print(f"[INFO] Battery: {battery}% ")
+    except Exception as e:
+        print(f"[WARN] Could not read battery/voltage: {e}")
+
     tello_prepare_stream(drone, streamon_delay)
 
     print(f"[INFO] Waiting {slam_start_wait:.1f}s for ORB-SLAM3 to start...")
@@ -362,6 +370,7 @@ def drone_scan_with_slam(cfg, input_arg):
 if __name__ == '__main__':
     cfg = loadConfig()
 
+
     #get angles from config file:
     EXTRA_ANGLE = cfg["extra_angle"]
     MAX_ANGLE_WOUT_EXTRA = cfg["max_angle_wout_extra"]
@@ -394,6 +403,7 @@ if __name__ == '__main__':
         except Exception:
             pass
         sys.exit(1)
+
 
     # 2) confirm CSV exists
     if not os.path.exists(csv_path):
