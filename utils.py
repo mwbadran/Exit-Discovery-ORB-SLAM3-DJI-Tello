@@ -144,20 +144,28 @@ def close_slam(proc, input_arg, drone=None, wait_s=15.0):
 
 # ---------- geometry / clustering ----------
 
-def readCSV(fileName: str):
-    x, y, z = [], [], []
-    with open(fileName, 'r') as f:
-        for line in f:
-            s = line.strip()
-            if not s:
+def readCSV(path):
+    xs, ys, zs = [], [], []
+    with open(path, 'r', encoding='utf-8', newline='') as f:
+        for i, line in enumerate(f):
+            line = line.strip()
+            if not line:
                 continue
-            parts = s.split(',')
-            if len(parts) != 3:
+            parts = [p.strip() for p in line.split(',')]
+            if len(parts) < 3:
                 continue
-            x.append(float(parts[0]))
-            y.append(float(parts[1]))
-            z.append(float(parts[2]))
-    return x, y, z
+            # skip header or any non-numeric first row(s)
+            if i == 0 and (parts[0].lower() == 'x' or parts[1].lower() == 'y' or parts[2].lower() == 'z'):
+                continue
+            try:
+                xs.append(float(parts[0]))
+                ys.append(float(parts[1]))
+                zs.append(float(parts[2]))
+            except ValueError:
+                # ignore stray malformed lines (e.g., partial writes)
+                continue
+    return xs, ys, zs
+
 
 def distanceBetween2Points(point1, point2):
     dx = point1[0] - point2[0]

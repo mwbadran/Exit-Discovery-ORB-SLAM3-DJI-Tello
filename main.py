@@ -118,12 +118,23 @@ def detect_wsl_ip() -> str:
 
 def build_wsl_slam_command(cfg) -> str:
     repo = cfg["wsl_repo_dir"].rstrip("/")
-    slam_bin = cfg.get("wsl_slam_binary", "./Examples/Monocular/mono_tello")
-    vocab_rel = cfg.get("wsl_vocab_rel", "Vocabulary/ORBvoc.txt")
+    vocab_rel    = cfg.get("wsl_vocab_rel", "Vocabulary/ORBvoc.txt")
     settings_rel = cfg.get("wsl_settings_rel", "Examples/Monocular/TUM1.yaml")
-    port = int(cfg.get("forward_port", 11111))
-    # We pass the FFmpeg-style input to ORB-SLAM3: "udp://@:PORT"
-    return f"cd {repo} && {slam_bin} {vocab_rel} {settings_rel} \"udp://@:{port}\""
+    source       = cfg.get("source","tello").lower()
+    port         = int(cfg.get("forward_port", 11111))
+
+    if source == "tello":
+        slam_bin = cfg.get("wsl_slam_binary", "./Examples/Monocular/mono_tello")
+        input_arg = f"\"udp://@:{port}\""
+    elif source == "webcam":
+        slam_bin = cfg.get("wsl_slam_binary_video", "./Examples/Monocular/mono_input")
+        input_arg = str(cfg.get("wsl_webcam_index", "0"))  # or /dev/video0
+    else:  # video
+        slam_bin = cfg.get("wsl_slam_binary_video", "./Examples/Monocular/mono_input")
+        input_arg = f"\"{cfg.get('wsl_video_path','')}\""
+
+    return f"cd {repo} && {slam_bin} {vocab_rel} {settings_rel} {input_arg}"
+
 
 
 def launch_wsl_slam(cfg):
