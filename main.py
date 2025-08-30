@@ -115,29 +115,111 @@ def phase_record(cfg: dict) -> Path:
 # Phase B: ORB-SLAM3 on file (mono_input)
 # --------------------------
 def phase_slam(cfg: dict, video_path: Path) -> None:
-    if not video_path.exists():
-        raise SystemExit(f"Video file not found: {video_path}")
+    """
+    Run ORB-SLAM3 mono_input on a video and export logs to artifacts/<video-stem>/.
+    - Ignores non-zero ORB-SLAM3 exit if 'ignore_errors' is True.
+    - Lists what WSL wrote to its log dir, previews first lines, then copies to Windows.
+    - Glob quoting fixed so *.csv/*.txt/*.pcd/*.bin actually match.
+    """
+    orb = cfg['wsl_orbslam']
 
-    orb = cfg["wsl_orbslam"]
-    orb_root = orb["root"]
-    if "USER" in orb_root or orb_root.strip("/") == "":
-        raise SystemExit(
-            f'Please set "wsl_orbslam.root" in config.json to your WSL path, e.g. "/home/mwbadran/dev/ORB_SLAM3". '
-            f'Current value: {orb_root}'
-        )
-
-    exe = orb.get("mono_input_exe", "Examples/Monocular/mono_input")
-    voc = orb.get("vocabulary", "Vocabulary/ORBvoc.txt")
-    yaml = orb.get("settings", "Examples/Monocular/TUM1.yaml")
-
-    # NOTE: be sure to pass a string to to_wsl_path
+    # Inputs & paths
     video_wsl = to_wsl_path(str(video_path))
-    print(f"[WSL] launching ORB-SLAM3 mono_input on {video_wsl}")
+    orb_root  = orb['root'].rstrip('/')                         # e.g. /home/USER/dev/ORB_SLAM3
+    exe       = orb.get('mono_input_exe', 'Examples/Monocular/mono_input')
+    voc       = orb.get('vocabulary',   'Vocabulary/ORBvoc.txt')
+    yaml      = orb.get('settings',     'Examples/Monocular/TUM1.yaml')
+    log_dir   = orb.get('log_dir',      'log').strip('/')
+    log_wsl   = f"{orb_root}/{log_dir}".rstrip('/')
 
-    cmd = f"cd {orb_root} && ./{exe} {voc} {yaml} '{video_wsl}'"
-    rc = wsl_cmd(cmd, passthrough=True)
-    if rc != 0:
+    # Windows export
+    outputs_base = Path(orb.get('outputs_dir', 'artifacts')).resolve()
+    export_dir   = outputs_base / video_path.stem               # .../artifacts/tello_YYYYMMDD_HHMMSS
+    ensure_dirs(export_dir)
+    dest_wsl     = f"{to_wsl_path(str(outputs_base)).rstrip('/')}/{video_path.stem}"
+
+    # 1) Run ORB-SLAM3
+    print(f"[WSL] launching ORB-SLAM3 mono_input on {video_wsl}")
+    slam_cmd = f"cd '{orb_root}' && ./{exe} '{voc}' '{yaml}' '{video_wsl}'"
+    rc = wsl_cmd(slam_cmd, passthrough=True)
+
+    # 2) List WSL log dir (debug) — NOTE: no quotes around globs
+    print(f"[RUN] wsl bash -lc \"echo '[WSL] listing log dir: {log_wsl}'; "
+          f"if [ -d '{log_wsl}' ]; then "
+          f"  ls -lah --time-style=long-iso '{log_wsl}' || true; "
+          f"  echo '[WSL] preview first lines (if any):'; "
+          f"  shopt -s nullglob; "
+          f"  for f in {log_wsl}/*.csv {log_wsl}/*.txt; do "
+          f"    echo '---' \"$f\"; head -n 5 \"$f\"; "
+          f"  done; "
+          f"else echo '[WSL] log dir not found'; fi\"")
+    list_cmd = (
+        f"echo '[WSL] listing log dir: {log_wsl}'; "
+        f"if [ -d '{log_wsl}' ]; then "
+        f"  ls -lah --time-style=long-iso '{log_wsl}' || true; "
+        f"  echo '[WSL] preview first lines (if any):'; "
+        f"  shopt -s nullglob; "
+        f"  for f in {log_wsl}/*.csv {log_wsl}/*.txt; do "
+        f"    echo '---' \"$f\"; head -n 5 \"$f\"; "
+        f"  done; "
+        f"else echo '[WSL] log dir not found'; fi"
+    )
+    wsl_cmd(list_cmd, passthrough=True)
+
+    # 3) Robust copy from WSL -> Windows (no quoted globs, no unary-operator error)
+    print(
+        f"[RUN] wsl bash -lc \""
+        f"shopt -s nullglob; "
+        f"mkdir -p '{dest_wsl}'; "
+        f"files=({log_wsl}/*.txt {log_wsl}/*.csv {log_wsl}/*.pcd {log_wsl}/*.bin); "
+        f"if [ ${{#files[@]}} -gt 0 ]; then "
+        f"  cp -f \"${{files[@]}}\" '{dest_wsl}/'; "
+        f"  echo '[WSL] exported files to {dest_wsl}:'; ls -1 '{dest_wsl}' 2>/dev/null || true; "
+        f"else "
+        f"  echo '[WSL] wildcard copy found nothing; trying explicit known files...'; "
+        f"  [ -f '{log_wsl}/KeyFrameTrajectory.txt' ] && cp -f '{log_wsl}/KeyFrameTrajectory.txt' '{dest_wsl}/' || true; "
+        f"  [ -f '{log_wsl}/pointData.csv' ] && cp -f '{log_wsl}/pointData.csv' '{dest_wsl}/' || true; "
+        f"  echo '[WSL] after explicit copy:'; ls -1 '{dest_wsl}' 2>/dev/null || true; "
+        f"  if [ ! -e '{dest_wsl}/KeyFrameTrajectory.txt' ] && [ ! -e '{dest_wsl}/pointData.csv' ]; then "
+        f"    echo '[WSL] still nothing; archiving the whole log dir...'; "
+        f"    if [ -d '{log_wsl}' ]; then "
+        f"      tar -C '{log_wsl}' -cf '{dest_wsl}/log_dump.tar' . 2>/dev/null || true; "
+        f"      echo '[WSL] archive contents:'; tar -tf '{dest_wsl}/log_dump.tar' 2>/dev/null | head -n 50 || true; "
+        f"    fi; "
+        f"  fi; "
+        f"fi\""
+    )
+    copy_cmd = (
+        f"shopt -s nullglob; "
+        f"mkdir -p '{dest_wsl}'; "
+        f"files=({log_wsl}/*.txt {log_wsl}/*.csv {log_wsl}/*.pcd {log_wsl}/*.bin); "
+        f"if [ ${{#files[@]}} -gt 0 ]; then "
+        f"  cp -f \"${{files[@]}}\" '{dest_wsl}/'; "
+        f"  echo '[WSL] exported files to {dest_wsl}:'; ls -1 '{dest_wsl}' 2>/dev/null || true; "
+        f"else "
+        f"  echo '[WSL] wildcard copy found nothing; trying explicit known files...'; "
+        f"  [ -f '{log_wsl}/KeyFrameTrajectory.txt' ] && cp -f '{log_wsl}/KeyFrameTrajectory.txt' '{dest_wsl}/' || true; "
+        f"  [ -f '{log_wsl}/pointData.csv' ] && cp -f '{log_wsl}/pointData.csv' '{dest_wsl}/' || true; "
+        f"  echo '[WSL] after explicit copy:'; ls -1 '{dest_wsl}' 2>/dev/null || true; "
+        f"  if [ ! -e '{dest_wsl}/KeyFrameTrajectory.txt' ] && [ ! -e '{dest_wsl}/pointData.csv' ]; then "
+        f"    echo '[WSL] still nothing; archiving the whole log dir...'; "
+        f"    if [ -d '{log_wsl}' ]; then "
+        f"      tar -C '{log_wsl}' -cf '{dest_wsl}/log_dump.tar' . 2>/dev/null || true; "
+        f"      echo '[WSL] archive contents:'; tar -tf '{dest_wsl}/log_dump.tar' 2>/dev/null | head -n 50 || true; "
+        f"    fi; "
+        f"  fi; "
+        f"fi"
+    )
+    wsl_cmd(copy_cmd, passthrough=True)
+
+    # 4) Don’t hard-fail on ORB-SLAM3 crashes unless you ask for it
+    if rc != 0 and orb.get('ignore_errors', True):
+        print(f"[SLAM] non-zero exit ({rc}) ignored; artifacts saved to: {export_dir}")
+    elif rc != 0:
         raise SystemExit(f"ORB-SLAM3 exited with code {rc}")
+    else:
+        print(f"[SLAM] artifacts saved to: {export_dir}")
+
 
 
 # --------------------------
@@ -200,7 +282,11 @@ def main():
             video_path = Path(args.video).expanduser().resolve()
         else:
             rec_dir = Path(cfg["record"]["video_dir"]).expanduser().resolve()
-            vids = sorted(rec_dir.glob("tello_*.mp4")) + sorted(rec_dir.glob("tello_*.mkv")) + sorted(rec_dir.glob("tello_*.avi"))
+            vids = (
+                sorted(rec_dir.glob("tello_*.mp4"))
+                + sorted(rec_dir.glob("tello_*.mkv"))
+                + sorted(rec_dir.glob("tello_*.avi"))
+            )
             if not vids:
                 raise SystemExit("No recordings found. Run --record-only first, or pass --video.")
             video_path = vids[-1]

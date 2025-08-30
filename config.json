@@ -1,5 +1,10 @@
 {
-  "drone": { "speed_cmps": 10, "up_after_takeoff_cm": 70, "yaw_step_deg": 15, "yaw_pause_s": 0.2 },
+  "drone": {
+    "speed_cmps": 10,
+    "up_after_takeoff_cm": 70,
+    "yaw_step_deg": 15,
+    "yaw_pause_s": 0.2
+  },
   "record": {
     "video_dir": "recordings",
     "container": "mp4",
@@ -16,7 +21,17 @@
     "root": "/home/mwbadran/dev/ORB_SLAM3",
     "mono_input_exe": "Examples/Monocular/mono_input",
     "vocabulary": "Vocabulary/ORBvoc.txt",
-    "settings": "Examples/Monocular/TUM1.yaml"
+    "settings": "Examples/Monocular/telloCal.yaml",
+
+    "log_dir": "log",
+    "outputs_dir": "artifacts",
+    "ignore_errors": true
   },
-  "exit_mission": { "up_after_takeoff_cm": 50, "exit_heading_deg": 0.0, "forward_cm": 300, "segment_cm": 50, "segment_pause_s": 0.3 }
+  "exit_mission": {
+    "up_after_takeoff_cm": 50,
+    "exit_heading_deg": 0.0,
+    "forward_cm": 300,
+    "segment_cm": 50,
+    "segment_pause_s": 0.3
+  }
 }
