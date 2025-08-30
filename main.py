@@ -12,7 +12,7 @@ from djitellopy import Tello
 from plot import *
 from ExitFinding import *
 from PointCloudCleaning import *
-from utils import *  # readCSV / makeCloud / etc.
+from utils import *
 
 MAX_ANGLE = 360
 
@@ -25,6 +25,7 @@ def loadConfig():
 
 
 def slam_root_from_exe(exe_path: str) -> str:
+    # exe is ...\x64\Release\slam.exe  -> root is THREE dirs up: ...\ (ORB_SLAM3_Windows)
     return os.path.dirname(os.path.dirname(os.path.dirname(exe_path)))
 
 
@@ -38,6 +39,10 @@ def csv_path_from_config(cfg):
 # -------------------- UDP forwarder (Windows -> WSL) --------------------
 
 class UDPForwarder(threading.Thread):
+    """
+    Forwards UDP H264 from 0.0.0.0:forward_port on Windows to (WSL_IP, forward_port).
+    Stop with .stop(); it closes sockets and exits the thread loop.
+    """
     def __init__(self, wsl_ip: str, port: int):
         super().__init__(daemon=True)
         self.wsl_ip = wsl_ip
@@ -91,28 +96,27 @@ class UDPForwarder(threading.Thread):
 
 
 def detect_wsl_ip() -> str:
+    """
+    Query WSL for its current IPv4 (first token of `hostname -I`).
+    Works from Windows by invoking `wsl`.
+    """
     try:
-        with open('config.json', 'r', encoding='utf-8') as f:
-            cfg = load(f)
-            if cfg.get("wsl_target_ip"):
-                print(f"[WSL] using override target IP: {cfg['wsl_target_ip']}")
-                return cfg["wsl_target_ip"]
-    except Exception:
-        pass
-
-    try:
-        res = subprocess.run(["wsl", "hostname", "-I"], capture_output=True, text=True, check=True)
+        res = subprocess.run(
+            ["wsl", "hostname", "-I"],
+            capture_output=True, text=True, check=True
+        )
+        # hostname -I may return multiple addresses; take the first IPv4-like token
         tokens = res.stdout.strip().split()
         for t in tokens:
-            if t.count(".") == 3:
-                print(f"[WSL] detected IP via hostname -I: {t}")
+            if t.count(".") == 3:  # naive IPv4 check
                 return t
     except Exception as e:
         print("[WSL] unable to detect IP:", e)
+    # fallback to a common default; user can still edit config if needed
     return "172.30.0.1"
 
 
-# -------------------- WSL ORB-SLAM3 launcher + reader --------------------
+# -------------------- WSL SLAM launcher --------------------
 
 def build_wsl_slam_command(cfg) -> str:
     repo = cfg["wsl_repo_dir"].rstrip("/")
@@ -123,22 +127,26 @@ def build_wsl_slam_command(cfg) -> str:
 
     if source == "tello":
         slam_bin = cfg.get("wsl_slam_binary", "./Examples/Monocular/mono_tello")
-        # IMPORTANT: use 0.0.0.0 (portable), keep options minimal & safe
-        url = f"udp://0.0.0.0:{port}?overrun_nonfatal=1&fifo_size=50000000"
-        input_arg = f"'{url}'"   # single-quotes for bash -lc
+        # robust ffmpeg URL: listen on all IFs, large fifo, tolerate overruns, short timeout
+        url = f"udp://@:{port}?overrun_nonfatal=1&fifo_size=50000000&timeout=3000000"
+        input_arg = f"\"{url}\""
     elif source == "webcam":
         slam_bin = cfg.get("wsl_slam_binary_video", "./Examples/Monocular/mono_input")
         input_arg = str(cfg.get("wsl_webcam_index", "0"))
     else:  # video
         slam_bin = cfg.get("wsl_slam_binary_video", "./Examples/Monocular/mono_input")
-        input_arg = f"'{cfg.get('wsl_video_path','')}'"
+        input_arg = f"\"{cfg.get('wsl_video_path','')}\""
 
-    prefix = "export ORB3_VIEWER=0; " if cfg.get("wsl_disable_viewer") else ""
-    # mono_tello should print "[READY] capture_open" right after cap.isOpened()
-    return f"cd {repo} && {prefix}{slam_bin} {vocab_rel} {settings_rel} {input_arg}"
+    return f"cd {repo} && {slam_bin} {vocab_rel} {settings_rel} {input_arg}"
+
+
 
 
 def launch_wsl_slam(cfg):
+    """
+    Launch ORB-SLAM3 inside WSL and return the Popen handle.
+    We rely on `wsl` command preinstalled on Windows.
+    """
     cmd = build_wsl_slam_command(cfg)
     print("[WSL] launching ORB-SLAM3:\n    wsl bash -lc \"{}\"".format(cmd))
     try:
@@ -152,86 +160,18 @@ def launch_wsl_slam(cfg):
         return None
 
 
-class ProcReader(threading.Thread):
-    def __init__(self, proc, token=None):
-        super().__init__(daemon=True)
-        self.proc = proc
-        self.token = token
-        self.ready_event = threading.Event()
-
-    def run(self):
-        if self.proc is None or self.proc.stdout is None:
-            return
-        try:
-            for line in iter(self.proc.stdout.readline, ''):
-                if not line:
-                    break
-                line = line.rstrip('\n')
-                print(f"[WSL] {line}")
-                if self.token and self.token in line:
-                    self.ready_event.set()
-        except Exception:
-            pass
-
-
-def wait_for_ready(proc, token="[READY] capture_open", timeout=12.0) -> bool:
-    if proc is None:
-        return False
-    reader = ProcReader(proc, token=token)
-    reader.start()
-    ok = reader.ready_event.wait(timeout=timeout)
-    if not ok:
-        print("[WSL] WARNING: didn't see READY within timeout")
-    return ok
-
-
-def drain_proc_output(proc, burst_lines=8, tag="[WSL]"):
+def drain_proc_output(proc, tag="[WSL]"):
+    """Non-blocking-ish drain: print a few lines to show progress."""
     if proc is None or proc.stdout is None:
         return
     try:
-        for _ in range(burst_lines):
+        for _ in range(8):  # just a small burst so we don't block
             line = proc.stdout.readline()
             if not line:
                 break
             print(f"{tag} {line.rstrip()}")
     except Exception:
         pass
-
-
-# -------------------- local slam closer --------------------
-
-def safe_close_slam(proc, input_arg, drone=None, wait_s=15.0):
-    if str(input_arg).upper() == "TELLO":
-        if drone is not None:
-            try:
-                drone.streamoff()
-            except Exception:
-                pass
-        if proc is not None:
-            try:
-                proc.wait(timeout=wait_s)
-                return
-            except subprocess.TimeoutExpired:
-                pass
-        sleep(min(5.0, wait_s))
-        return
-
-    try:
-        press_esc_to_slam_window()
-    except Exception:
-        pass
-    if proc is not None:
-        try:
-            proc.wait(timeout=wait_s); return
-        except subprocess.TimeoutExpired:
-            pass
-        try:
-            proc.terminate(); proc.wait(timeout=3.0)
-        except subprocess.TimeoutExpired:
-            try:
-                proc.kill()
-            except Exception:
-                pass
 
 
 # -------------------- Tello helpers --------------------
@@ -262,18 +202,27 @@ def append_telemetry(row_dict: dict, path: str):
 # -------------------- main mission --------------------
 
 def drone_scan_with_slam(cfg, input_arg):
+    """
+    Full pipeline:
+      - start WSL ORB-SLAM3 (mono_tello) via `wsl`
+      - auto-start UDP forwarder to WSL IP
+      - connect & fly Tello 360° scan with nudges
+      - stop stream -> let SLAM exit -> stop forwarder
+      - return CSV path and the live drone handle for post-processing moves
+    """
     vocab     = cfg["vocab"]
     settings  = cfg["settings"]
     slam_exe  = cfg["slam_exe"]
     source    = cfg["source"].lower()
     csv_path  = csv_path_from_config(cfg)
 
-    streamon_delay     = float(cfg.get("streamon_delay_sec", 0.5))
-    slam_start_wait    = float(cfg.get("slam_start_wait_s", 2.0))
-    rotation_step      = int(cfg.get("rotation_step_deg", 10))
-    rotation_pause     = float(cfg.get("rotation_pause_s", 0.4))
-    target_height      = int(cfg.get("height", 70))
-    speed              = int(cfg.get("speed", 10))
+    # config params
+    streamon_delay     = float(cfg["streamon_delay_sec"])
+    slam_start_wait    = float(cfg["slam_start_wait_s"])
+    rotation_step      = int(cfg["rotation_step_deg"])
+    rotation_pause     = float(cfg["rotation_pause_s"])
+    target_height      = int(cfg["height"])
+    speed              = int(cfg["speed"])
     slam_exit_wait_s   = float(cfg.get("slam_exit_wait_s", 15.0))
     do_nudge           = bool(cfg.get("do_nudge", True))
     nudge_cm           = int(cfg.get("nudge_cm", 20))
@@ -281,112 +230,121 @@ def drone_scan_with_slam(cfg, input_arg):
     telemetry_csv      = cfg.get("telemetry_csv", os.path.join(slam_root_from_exe(slam_exe), "log", "telemetry.csv"))
     fwd_port           = int(cfg.get("forward_port", 11111))
 
+    # 0) Start WSL ORB-SLAM3 and UDP forwarder (only in wsl_mode)
     slam_proc = None
     fwd = None
-
+    wsl_ip = None
     if cfg.get("wsl_mode"):
         wsl_ip = detect_wsl_ip()
         fwd = UDPForwarder(wsl_ip, fwd_port)
         fwd.start()
         slam_proc = launch_wsl_slam(cfg)
-        wait_for_ready(slam_proc, timeout=12.0)
+        # give mono_tello a head start and show some logs
+        drain_proc_output(slam_proc)
     else:
+        # legacy Windows SLAM path
         print("[LEGACY] launching Windows slam.exe")
         slam_proc = runOrbSlam3(slam_exe, vocab, settings, input_arg)
 
-    drone = None
-    if source == "tello":
-        drone = Tello()
-        drone.connect()
-        drone.set_speed(speed)
-
-        tello_prepare_stream(drone, streamon_delay)
-
-        print(f"[INFO] Waiting {slam_start_wait:.1f}s for ORB-SLAM3 to start...")
-        sleep(slam_start_wait)
-        drain_proc_output(slam_proc)
-
-        drone.takeoff()
-        try:
-            try: current_h = drone.get_height()
-            except Exception: current_h = 0
-            delta = int(target_height - current_h)
-            if   delta > 0: drone.move_up(delta)
-            elif delta < 0: drone.move_down(-delta)
-            sleep(0.5)
-
-            rotated = 0
-            step_i = 0
-            while rotated < MAX_ANGLE:
-                step = min(rotation_step, MAX_ANGLE - rotated)
-                ok = True
-                note = ""
-                try:
-                    drone.rotate_clockwise(step)
-                except Exception as e:
-                    ok = False
-                    note = f"rotate_err:{e}"
-
-                try: yaw = drone.get_yaw()
-                except Exception: yaw = ""
-                try: h = drone.get_height()
-                except Exception: h = ""
-                try: bat = drone.get_battery()
-                except Exception: bat = ""
-
-                append_telemetry({
-                    "ts": datetime.now().isoformat(timespec="seconds"),
-                    "step_i": step_i,
-                    "rotated_deg_total": rotated + step,
-                    "yaw": yaw, "height_cm": h, "battery": bat,
-                    "cmd": f"cw {step}", "cmd_ok": "1" if ok else "0",
-                    "note": note
-                }, telemetry_csv)
-
-                rotated += step
-                step_i += 1
-
-                if do_nudge and (step_i % max(1, nudge_every_steps) == 0):
-                    try:
-                        drone.move_up(nudge_cm); drone.move_down(nudge_cm)
-                        append_telemetry({
-                            "ts": datetime.now().isoformat(timespec="seconds"),
-                            "step_i": step_i,
-                            "rotated_deg_total": rotated,
-                            "yaw": yaw, "height_cm": h, "battery": bat,
-                            "cmd": f"nudge {nudge_cm}", "cmd_ok": "1",
-                            "note": "up/down nudge"
-                        }, telemetry_csv)
-                    except Exception as e:
-                        append_telemetry({
-                            "ts": datetime.now().isoformat(timespec="seconds"),
-                            "step_i": step_i,
-                            "rotated_deg_total": rotated,
-                            "yaw": yaw, "height_cm": h, "battery": bat,
-                            "cmd": f"nudge {nudge_cm}", "cmd_ok": "0",
-                            "note": f"nudge_err:{e}"
-                        }, telemetry_csv)
-
-                sleep(rotation_pause)
-                drain_proc_output(slam_proc)
-
-            safe_close_slam(slam_proc, input_arg, drone=drone, wait_s=slam_exit_wait_s)
-
-        except KeyboardInterrupt:
-            print("[WARN] KeyboardInterrupt during scan.")
-            safe_close_slam(slam_proc, input_arg, drone=drone, wait_s=8.0)
-            raise
-        except Exception as e:
-            print("Scan error:", e)
-            safe_close_slam(slam_proc, input_arg, drone=drone, wait_s=8.0)
-
-    else:
+    if source != "tello":
         if slam_proc is not None:
             try:
                 slam_proc.wait()
             except Exception:
                 pass
+        if fwd: fwd.stop()
+        return csv_path, None
 
+    # 1) Tello flow
+    drone = Tello()
+    drone.connect()
+    drone.set_speed(speed)
+
+    tello_prepare_stream(drone, streamon_delay)
+
+    print(f"[INFO] Waiting {slam_start_wait:.1f}s for ORB-SLAM3 to start...")
+    sleep(slam_start_wait)
+    drain_proc_output(slam_proc)
+
+    # 360° scan with nudges
+    drone.takeoff()
+    try:
+        try:
+            current_h = drone.get_height()
+        except Exception:
+            current_h = 0
+        delta = int(target_height - current_h)
+        if   delta > 0: drone.move_up(delta)
+        elif delta < 0: drone.move_down(-delta)
+        sleep(0.5)
+
+        rotated = 0
+        step_i = 0
+        while rotated < MAX_ANGLE:
+            step = min(rotation_step, MAX_ANGLE - rotated)
+            ok = True
+            note = ""
+            try:
+                drone.rotate_clockwise(step)
+            except Exception as e:
+                ok = False
+                note = f"rotate_err:{e}"
+
+            try: yaw = drone.get_yaw()
+            except Exception: yaw = ""
+            try: h = drone.get_height()
+            except Exception: h = ""
+            try: bat = drone.get_battery()
+            except Exception: bat = ""
+
+            append_telemetry({
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "step_i": step_i,
+                "rotated_deg_total": rotated + step,
+                "yaw": yaw, "height_cm": h, "battery": bat,
+                "cmd": f"cw {step}", "cmd_ok": "1" if ok else "0",
+                "note": note
+            }, telemetry_csv)
+
+            rotated += step
+            step_i += 1
+
+            if do_nudge and (step_i % max(1, nudge_every_steps) == 0):
+                try:
+                    drone.move_up(nudge_cm); drone.move_down(nudge_cm)
+                    append_telemetry({
+                        "ts": datetime.now().isoformat(timespec="seconds"),
+                        "step_i": step_i,
+                        "rotated_deg_total": rotated,
+                        "yaw": yaw, "height_cm": h, "battery": bat,
+                        "cmd": f"nudge {nudge_cm}", "cmd_ok": "1",
+                        "note": "up/down nudge"
+                    }, telemetry_csv)
+                except Exception as e:
+                    append_telemetry({
+                        "ts": datetime.now().isoformat(timespec="seconds"),
+                        "step_i": step_i,
+                        "rotated_deg_total": rotated,
+                        "yaw": yaw, "height_cm": h, "battery": bat,
+                        "cmd": f"nudge {nudge_cm}", "cmd_ok": "0",
+                        "note": f"nudge_err:{e}"
+                    }, telemetry_csv)
+
+            sleep(rotation_pause)
+            drain_proc_output(slam_proc)
+
+        # 2) Close SLAM gracefully: stopping stream lets mono_tello exit.
+        close_slam(slam_proc, input_arg, drone=drone, wait_s=slam_exit_wait_s)
+
+    except KeyboardInterrupt:
+        print("[WARN] KeyboardInterrupt during scan.")
+        close_slam(None, input_arg, drone=drone, wait_s=8.0)
+        raise
+    except Exception as e:
+        print("Scan error:", e)
+        close_slam(None, input_arg, drone=drone, wait_s=8.0)
+
+    # 3) stop forwarder + wait for WSL proc to exit
     if fwd:
         fwd.stop()
         fwd.join(timeout=3.0)
@@ -407,6 +365,7 @@ def drone_scan_with_slam(cfg, input_arg):
 if __name__ == '__main__':
     cfg = loadConfig()
 
+    # decide input arg (mainly relevant for legacy Windows)
     source = cfg["source"].lower()
     if source == "tello":
         tello_mode = cfg.get("tello_input_mode", "udp").lower()
@@ -422,6 +381,7 @@ if __name__ == '__main__':
     else:
         input_arg = cfg["video_path"]
 
+    # 1) run the scan with SLAM (WSL or legacy)
     try:
         csv_path, drone = drone_scan_with_slam(cfg, input_arg)
     except KeyboardInterrupt:
@@ -432,6 +392,7 @@ if __name__ == '__main__':
             pass
         sys.exit(1)
 
+    # 2) confirm CSV exists
     if not os.path.exists(csv_path):
         root_dir = slam_root_from_exe(cfg["slam_exe"])
         exe_rel  = os.path.join("x64", "Release", "slam.exe")
@@ -447,6 +408,7 @@ if __name__ == '__main__':
             safe_land(drone); drone.end()
         raise SystemExit(1)
 
+    # 3) process map
     x, y, z = readCSV(csv_path)
     if len(x) == 0:
         print("---- SLAM produced 0 points. Nothing to process. ----")
@@ -464,8 +426,10 @@ if __name__ == '__main__':
     )
     inX, inY, inZ = pcdToArrays(inlierPCD)
 
+    # room rectangle from top-down (X,Z)
     box = getAverageRectangle(inX, inZ)
 
+    # plots
     plots_dir = cfg.get("plots_dir", "DebugPlots")
     os.makedirs(plots_dir, exist_ok=True)
     tag = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -481,6 +445,7 @@ if __name__ == '__main__':
     clusters = hierarchicalClustering(xOut, zOut, float(cfg["thresh"]))
     centers  = getClustersCenters(clusters)
 
+    # 4) navigate to exit (keep airborne)
     if len(centers) == 0:
         print("No exits detected. Done.")
         plot2DWithBoxAndCenters(inX, inZ, box, centers=[],
@@ -494,7 +459,7 @@ if __name__ == '__main__':
                             save_path=os.path.join(plots_dir, f"centers_{tag}.png"),
                             title="Detected Exit Cluster Centers (X,Z)")
 
-    if 'drone' in locals() and drone is not None:
+    if drone is not None:
         try:
             ensure_airborne(drone)
             moveToExit(drone, centers)

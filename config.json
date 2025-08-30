@@ -2,7 +2,7 @@
   "slam_exe": "C:\\ORB_SLAM3_Windows\\x64\\Release\\slam.exe",
   "vocab": "C:\\ORB_SLAM3_Windows\\Vocabulary\\ORBvoc.txt",
   "settings": "C:\\ORB_SLAM3_Windows\\Examples\\Monocular\\TUM1.yaml",
-  "source": "tello",
+  "source": "video",
   "tello_input_mode": "udp",
   "tello_webcam_index": "0",
   "webcam_index": "0",
