@@ -22,9 +22,9 @@
     "mono_input_exe": "Examples/Monocular/mono_input",
     "vocabulary": "Vocabulary/ORBvoc.txt",
     "settings": "Examples/Monocular/telloCal.yaml",
-
     "log_dir": "log",
     "outputs_dir": "artifacts",
+    "wsl_distro": "Ubuntu-20.04",
     "ignore_errors": true
   },
   "exit_mission": {
@@ -33,5 +33,10 @@
     "forward_cm": 300,
     "segment_cm": 50,
     "segment_pause_s": 0.3
-  }
+  },
+  "watchdog": {
+  "idle_sec": 6.0,
+  "max_trackloss_lines": 80,
+  "hard_timeout_sec": 0
+}
 }

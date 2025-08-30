@@ -23,7 +23,7 @@ def getAverageRectangle(x, y):
 
     return (xLeft, yDown), (xRight, yDown), (xRight, yUp), (xLeft, yUp)
 
-# The rest retained for reference (unused by pipeline)
+# ---- optional helpers kept for reference / parity with the ORB-SLAM2 scripts ----
 def splitIntoSubarrays(array, k):
     start = 0; subs = []
     if k <= 0: k = 1

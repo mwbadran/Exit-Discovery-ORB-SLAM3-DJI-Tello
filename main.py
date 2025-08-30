@@ -3,6 +3,7 @@ import time
 import argparse
 from datetime import datetime
 from pathlib import Path
+from typing import Optional, Tuple, List
 
 # Third-party (optional for --slam-only)
 try:
@@ -10,6 +11,7 @@ try:
 except Exception:
     Tello = None
 
+# our helpers
 from utils import (
     ensure_dirs,
     start_ffmpeg_record,
@@ -18,7 +20,17 @@ from utils import (
     wsl_cmd,
     run,
     pretty_json,
+    wsl_to_unc,
+    read_xyz_csv,              # NEW: simple CSV → x,y,z
+    pointsOutOfBox,
+    hierarchicalClustering,
+    getClustersCenters,
 )
+
+# exit/pcd tools
+from ExitFinding import getAverageRectangle
+from PointCloudCleaning import removeStatisticalOutlier
+from plot import plot2DWithBoxAndCenters
 
 THIS_DIR = Path(__file__).resolve().parent
 
@@ -114,12 +126,11 @@ def phase_record(cfg: dict) -> Path:
 # --------------------------
 # Phase B: ORB-SLAM3 on file (mono_input)
 # --------------------------
-def phase_slam(cfg: dict, video_path: Path) -> None:
+def phase_slam(cfg: dict, video_path: Path) -> Tuple[List[str], str, Path]:
     """
-    Run ORB-SLAM3 mono_input on a video and export logs to artifacts/<video-stem>/.
-    - Ignores non-zero ORB-SLAM3 exit if 'ignore_errors' is True.
-    - Lists what WSL wrote to its log dir, previews first lines, then copies to Windows.
-    - Glob quoting fixed so *.csv/*.txt/*.pcd/*.bin actually match.
+    Run ORB-SLAM3 mono_input on a video.
+    Returns:
+      (plot_paths, log_unc_dir, artifacts_dir)
     """
     orb = cfg['wsl_orbslam']
 
@@ -132,100 +143,160 @@ def phase_slam(cfg: dict, video_path: Path) -> None:
     log_dir   = orb.get('log_dir',      'log').strip('/')
     log_wsl   = f"{orb_root}/{log_dir}".rstrip('/')
 
-    # Windows export
+    # Where to save plots on Windows
     outputs_base = Path(orb.get('outputs_dir', 'artifacts')).resolve()
-    export_dir   = outputs_base / video_path.stem               # .../artifacts/tello_YYYYMMDD_HHMMSS
-    ensure_dirs(export_dir)
-    dest_wsl     = f"{to_wsl_path(str(outputs_base)).rstrip('/')}/{video_path.stem}"
+    plot_dir     = outputs_base / video_path.stem              # artifacts/tello_YYYYMMDD_HHMMSS
+    ensure_dirs(plot_dir)
 
     # 1) Run ORB-SLAM3
     print(f"[WSL] launching ORB-SLAM3 mono_input on {video_wsl}")
     slam_cmd = f"cd '{orb_root}' && ./{exe} '{voc}' '{yaml}' '{video_wsl}'"
     rc = wsl_cmd(slam_cmd, passthrough=True)
 
-    # 2) List WSL log dir (debug) — NOTE: no quotes around globs
-    print(f"[RUN] wsl bash -lc \"echo '[WSL] listing log dir: {log_wsl}'; "
-          f"if [ -d '{log_wsl}' ]; then "
-          f"  ls -lah --time-style=long-iso '{log_wsl}' || true; "
-          f"  echo '[WSL] preview first lines (if any):'; "
-          f"  shopt -s nullglob; "
-          f"  for f in {log_wsl}/*.csv {log_wsl}/*.txt; do "
-          f"    echo '---' \"$f\"; head -n 5 \"$f\"; "
-          f"  done; "
-          f"else echo '[WSL] log dir not found'; fi\"")
-    list_cmd = (
-        f"echo '[WSL] listing log dir: {log_wsl}'; "
-        f"if [ -d '{log_wsl}' ]; then "
-        f"  ls -lah --time-style=long-iso '{log_wsl}' || true; "
-        f"  echo '[WSL] preview first lines (if any):'; "
-        f"  shopt -s nullglob; "
-        f"  for f in {log_wsl}/*.csv {log_wsl}/*.txt; do "
-        f"    echo '---' \"$f\"; head -n 5 \"$f\"; "
-        f"  done; "
-        f"else echo '[WSL] log dir not found'; fi"
-    )
-    wsl_cmd(list_cmd, passthrough=True)
+    # 2) List WSL log dir (debug)
+    # list_cmd = (
+    #     f"echo '[WSL] listing log dir: {log_wsl}'; "
+    #     f"if [ -d '{log_wsl}' ]; then "
+    #     f"  ls -lah --time-style=long-iso '{log_wsl}' || true; "
+    #     f"  echo '[WSL] preview first lines (if any):'; "
+    #     f"  shopt -s nullglob; "
+    #     f"  for f in {log_wsl}/*.csv {log_wsl}/*.txt; do "
+    #     f"    echo '---' \"$f\"; head -n 5 \"$f\"; "
+    #     f"  done; "
+    #     f"else echo '[WSL] log dir not found'; fi"
+    # )
+    # wsl_cmd(list_cmd, passthrough=True)
 
-    # 3) Robust copy from WSL -> Windows (no quoted globs, no unary-operator error)
-    print(
-        f"[RUN] wsl bash -lc \""
-        f"shopt -s nullglob; "
-        f"mkdir -p '{dest_wsl}'; "
-        f"files=({log_wsl}/*.txt {log_wsl}/*.csv {log_wsl}/*.pcd {log_wsl}/*.bin); "
-        f"if [ ${{#files[@]}} -gt 0 ]; then "
-        f"  cp -f \"${{files[@]}}\" '{dest_wsl}/'; "
-        f"  echo '[WSL] exported files to {dest_wsl}:'; ls -1 '{dest_wsl}' 2>/dev/null || true; "
-        f"else "
-        f"  echo '[WSL] wildcard copy found nothing; trying explicit known files...'; "
-        f"  [ -f '{log_wsl}/KeyFrameTrajectory.txt' ] && cp -f '{log_wsl}/KeyFrameTrajectory.txt' '{dest_wsl}/' || true; "
-        f"  [ -f '{log_wsl}/pointData.csv' ] && cp -f '{log_wsl}/pointData.csv' '{dest_wsl}/' || true; "
-        f"  echo '[WSL] after explicit copy:'; ls -1 '{dest_wsl}' 2>/dev/null || true; "
-        f"  if [ ! -e '{dest_wsl}/KeyFrameTrajectory.txt' ] && [ ! -e '{dest_wsl}/pointData.csv' ]; then "
-        f"    echo '[WSL] still nothing; archiving the whole log dir...'; "
-        f"    if [ -d '{log_wsl}' ]; then "
-        f"      tar -C '{log_wsl}' -cf '{dest_wsl}/log_dump.tar' . 2>/dev/null || true; "
-        f"      echo '[WSL] archive contents:'; tar -tf '{dest_wsl}/log_dump.tar' 2>/dev/null | head -n 50 || true; "
-        f"    fi; "
-        f"  fi; "
-        f"fi\""
-    )
-    copy_cmd = (
-        f"shopt -s nullglob; "
-        f"mkdir -p '{dest_wsl}'; "
-        f"files=({log_wsl}/*.txt {log_wsl}/*.csv {log_wsl}/*.pcd {log_wsl}/*.bin); "
-        f"if [ ${{#files[@]}} -gt 0 ]; then "
-        f"  cp -f \"${{files[@]}}\" '{dest_wsl}/'; "
-        f"  echo '[WSL] exported files to {dest_wsl}:'; ls -1 '{dest_wsl}' 2>/dev/null || true; "
-        f"else "
-        f"  echo '[WSL] wildcard copy found nothing; trying explicit known files...'; "
-        f"  [ -f '{log_wsl}/KeyFrameTrajectory.txt' ] && cp -f '{log_wsl}/KeyFrameTrajectory.txt' '{dest_wsl}/' || true; "
-        f"  [ -f '{log_wsl}/pointData.csv' ] && cp -f '{log_wsl}/pointData.csv' '{dest_wsl}/' || true; "
-        f"  echo '[WSL] after explicit copy:'; ls -1 '{dest_wsl}' 2>/dev/null || true; "
-        f"  if [ ! -e '{dest_wsl}/KeyFrameTrajectory.txt' ] && [ ! -e '{dest_wsl}/pointData.csv' ]; then "
-        f"    echo '[WSL] still nothing; archiving the whole log dir...'; "
-        f"    if [ -d '{log_wsl}' ]; then "
-        f"      tar -C '{log_wsl}' -cf '{dest_wsl}/log_dump.tar' . 2>/dev/null || true; "
-        f"      echo '[WSL] archive contents:'; tar -tf '{dest_wsl}/log_dump.tar' 2>/dev/null | head -n 50 || true; "
-        f"    fi; "
-        f"  fi; "
-        f"fi"
-    )
-    wsl_cmd(copy_cmd, passthrough=True)
+    # 3) UNC path to WSL logs
+    distro = orb.get('wsl_distro', 'Ubuntu-20.04')
+    log_unc = wsl_to_unc(log_wsl, distro=distro)
+    print(f"[SLAM] logs UNC: {log_unc}")
 
-    # 4) Don’t hard-fail on ORB-SLAM3 crashes unless you ask for it
+    # 4) Quick static plots (topdown + 3D) into plot_dir
+    plot_paths = save_quick_plots_from_logs(source_dir=log_unc, out_dir=plot_dir)
+    for p in plot_paths:
+        print(f"[PLOT] saved -> {p}")
+
+    # 5) Error policy
     if rc != 0 and orb.get('ignore_errors', True):
-        print(f"[SLAM] non-zero exit ({rc}) ignored; artifacts saved to: {export_dir}")
+        print(f"[SLAM] non-zero exit ({rc}) ignored; plots saved to: {plot_dir}")
     elif rc != 0:
         raise SystemExit(f"ORB-SLAM3 exited with code {rc}")
     else:
-        print(f"[SLAM] artifacts saved to: {export_dir}")
+        print(f"[SLAM] plots saved to: {plot_dir}")
 
+    return [str(p) for p in plot_paths], log_unc, plot_dir
 
 
 # --------------------------
-# Phase C: simple exit flight
+# Exit analysis (from WSL logs)  — ported from the ORB-SLAM2 pipeline
 # --------------------------
-def phase_exit_flight(cfg: dict) -> None:
+def analyze_exit_from_logs(cfg: dict, log_unc_dir: str, artifacts_dir: Path) -> Tuple[Optional[float], Optional[int]]:
+    """
+    1) Read pointData.csv (X,Y,Z)
+    2) Clean with Statistical Outlier removal
+    3) Compute room rectangle on (X, Z)
+    4) Cluster out-of-box points → centers = candidate exits
+    5) Return heading (deg CW) and forward distance (cm) for the furthest exit
+    Also saves a 'exit_detection.png' plot in artifacts_dir.
+    """
+    # defaults (you can add these under cfg["exit_algo"] if you want)
+    ex = cfg.get("exit_algo", {})
+    voxel_size  = float(ex.get("voxel_size", 0.02))
+    nb_neighbors= int(ex.get("nb_neighbors", 20))
+    std_ratio   = float(ex.get("std_ratio", 2.0))
+    thresh      = float(ex.get("thresh",    1.5))
+    cm_per_unit = float(ex.get("cm_per_unit", 160.0))
+
+    pts_file = Path(log_unc_dir) / "pointData.csv"
+    x, y, z = read_xyz_csv(pts_file)
+    if not x:
+        print(f"[EXIT] no points in {pts_file}; cannot compute exit.")
+        return None, None
+
+    # Open3D clean (build PCD → remove statistical outliers)
+    import open3d as o3d
+    import numpy as np
+
+    P = np.vstack([x, y, z]).T.astype(np.float64)
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(P)
+    inlier, _ = removeStatisticalOutlier(pcd, voxel_size=voxel_size,
+                                         nb_neighbors=nb_neighbors, std_ratio=std_ratio)
+
+    # arrays again
+    A = np.asarray(inlier.points)
+    if A.shape[0] < 10:
+        print("[EXIT] too few inlier points.")
+        return None, None
+    inX = A[:, 0].tolist()
+    inZ = A[:, 2].tolist()
+
+    # room rectangle & out-of-box clustering (like the ORB-SLAM2 code)
+    room_box = getAverageRectangle(inX, inZ)
+    xOut, zOut = pointsOutOfBox(inX, inZ, room_box)
+    clusters = hierarchicalClustering(xOut, zOut, thresh=thresh)
+    centers  = getClustersCenters(clusters)
+
+    # save a quick visualization
+    out_img = artifacts_dir / "exit_detection.png"
+    try:
+        plot2DWithBoxAndCenters(inX, inZ, room_box, centers, save_path=str(out_img),
+                                title="Exit candidates (top-down X vs Z)")
+        print(f"[EXIT] plot saved -> {out_img}")
+    except Exception as e:
+        print(f"[EXIT] plot failed: {e}")
+
+    if not centers:
+        print("[EXIT] no exit clusters found.")
+        return None, None
+
+    # choose furthest exit from (0,0) in the (X,Z) plane and compute angle/distance
+    angle_deg, fwd_cm = compute_exit_plan_from_centers(centers, cm_per_unit=cm_per_unit)
+    print(f"[EXIT] heading={angle_deg:.1f}°  forward={fwd_cm} cm")
+    return angle_deg, fwd_cm
+
+
+def compute_exit_plan_from_centers(centers: List[Tuple[float, float]], cm_per_unit: float = 160.0) -> Tuple[float, int]:
+    """
+    Matches the ORB-SLAM2 'moveToExit' angle/distance logic: pick furthest center and
+    compute clockwise heading (deg) + forward distance (cm).
+    NOTE: preserves their trigonometry/quadrant logic for compatibility.
+    """
+    from math import degrees, tan
+
+    # pick furthest from origin (0,0)
+    max_d = float("-inf")
+    fur = (0.0, 0.0)
+    for (x, z) in centers:
+        d = (x * x + z * z) ** 0.5
+        if d > max_d:
+            max_d = d
+            fur = (x, z)
+
+    x, y = fur[0], fur[1]  # keep their naming (x,y) even though it's (X,Z)
+    # replicate original formula (they used tan() instead of atan/atan2)
+    # angle base:
+    base = 90 - int(degrees(tan(float(abs(y) / max(1e-9, abs(x))))))
+    if x > 0 > y:
+        base += 90
+    elif x < 0 and y < 0:
+        base += 180
+    elif x < 0 < y:
+        base += 270
+    angle = float(base % 360)
+
+    # distance scale: 1 SLAM unit ≈ 160 cm
+    distance_cm = int(max_d * cm_per_unit)
+    return angle, distance_cm
+
+
+# --------------------------
+# Phase C: exit flight
+# --------------------------
+def phase_exit_flight(cfg: dict,
+                      heading_override: Optional[float] = None,
+                      forward_override: Optional[int] = None) -> None:
     if Tello is None:
         raise SystemExit("djitellopy is required for flight. Install: pip install djitellopy")
 
@@ -238,14 +309,14 @@ def phase_exit_flight(cfg: dict) -> None:
             tel.move_up(up_cm)
             time.sleep(0.5)
 
-        head = float(cfg["exit_mission"].get("exit_heading_deg", 0.0))
+        head = heading_override if heading_override is not None else float(cfg["exit_mission"].get("exit_heading_deg", 0.0))
         if head >= 0:
             tel.rotate_clockwise(int(head))
         else:
             tel.rotate_counter_clockwise(int(-head))
         time.sleep(0.5)
 
-        dist_cm = int(cfg["exit_mission"].get("forward_cm", 200))
+        dist_cm = forward_override if forward_override is not None else int(cfg["exit_mission"].get("forward_cm", 300))
         step = int(cfg["exit_mission"].get("segment_cm", 50))
         pause = float(cfg["exit_mission"].get("segment_pause_s", 0.3))
 
@@ -263,13 +334,97 @@ def phase_exit_flight(cfg: dict) -> None:
             pass
 
 
+# --- Quick plots from WSL log folder -> saved under artifacts/<video-stem>/ ---
+def save_quick_plots_from_logs(source_dir, out_dir) -> list:
+    """
+    Reads pointData.csv and KeyFrameTrajectory.txt from source_dir (UNC path to WSL log)
+    and writes two static plots into out_dir:
+      - point_cloud_topdown.png (X vs Z with route)
+      - point_cloud_3d.png (3D scatter + route)
+    Returns list of saved file paths.
+    """
+    import csv
+    import matplotlib
+    matplotlib.use("Agg")  # headless
+    from matplotlib import pyplot as plt
+    import numpy as np
+    from pathlib import Path as _Path
+
+    src = _Path(source_dir)
+    dst = _Path(out_dir)
+    dst.mkdir(parents=True, exist_ok=True)
+
+    # Read points
+    pts_file = src / "pointData.csv"
+    if not pts_file.exists():
+        print(f"[PLOT] {pts_file} not found. Skipping plots.")
+        return []
+    pts = []
+    with pts_file.open("r", encoding="utf-8", errors="ignore") as f:
+        for row in csv.reader(f):
+            if not row or row[0].strip().startswith("#"):
+                continue
+            try:
+                x, y, z = float(row[0]), float(row[1]), float(row[2])
+                pts.append((x, y, z))
+            except Exception:
+                continue
+    if not pts:
+        print(f"[PLOT] No valid points parsed from {pts_file}.")
+        return []
+
+    # Read route (keyframes) if present
+    route = []
+    kf_file = src / "KeyFrameTrajectory.txt"
+    if kf_file.exists():
+        with kf_file.open("r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                if not line.strip() or line.startswith("#"):
+                    continue
+                cols = line.strip().split()
+                if len(cols) >= 8:
+                    try:
+                        tx, ty, tz = float(cols[1]), float(cols[2]), float(cols[3])
+                        route.append((tx, ty, tz))
+                    except Exception:
+                        pass
+
+    P = np.array(pts)
+
+    # 2D top-down (X vs Z)
+    fig = plt.figure(figsize=(8, 6))
+    ax = fig.add_subplot(111)
+    ax.scatter(P[:, 0], P[:, 2], s=1)
+    if route:
+        R = np.array(route)
+        ax.plot(R[:, 0], R[:, 2], linewidth=1)
+    ax.set_xlabel("X"); ax.set_ylabel("Z"); ax.set_aspect("equal", adjustable="box")
+    ax.set_title("SLAM point cloud (top-down)")
+    topdown_path = str(dst / "point_cloud_topdown.png")
+    plt.tight_layout(); plt.savefig(topdown_path, dpi=160); plt.close(fig)
+
+    # 3D scatter
+    fig = plt.figure(figsize=(8, 6))
+    ax = fig.add_subplot(111, projection="3d")
+    ax.scatter(P[:, 0], P[:, 1], P[:, 2], s=1)
+    if route:
+        R = np.array(route)
+        ax.plot(R[:, 0], R[:, 1], R[:, 2], linewidth=1)
+    ax.set_xlabel("X"); ax.set_ylabel("Y"); ax.set_zlabel("Z")
+    ax.set_title("SLAM point cloud (3D)")
+    cloud3d_path = str(dst / "point_cloud_3d.png")
+    plt.tight_layout(); plt.savefig(cloud3d_path, dpi=160); plt.close(fig)
+
+    return [topdown_path, cloud3d_path]
+
+
 def main():
     ap = argparse.ArgumentParser(
-        description="Record Tello video → run ORB-SLAM3 on it in WSL → fly to exit."
+        description="Record Tello video → run ORB-SLAM3 on it in WSL → compute exit → fly."
     )
     ap.add_argument("--config", default=str(default_config_path()), help="Path to config.json")
     ap.add_argument("--record-only", action="store_true", help="Only record (no SLAM, no mission)")
-    ap.add_argument("--slam-only", action="store_true", help="Run SLAM on latest recording or --video")
+    ap.add_argument("--slam-only", action="store_true", help="Run SLAM on latest recording or --video; also compute exit")
     ap.add_argument("--mission-only", action="store_true", help="Only run the exit mission")
     ap.add_argument("--video", default="", help="Video file for --slam-only")
     args = ap.parse_args()
@@ -290,17 +445,21 @@ def main():
             if not vids:
                 raise SystemExit("No recordings found. Run --record-only first, or pass --video.")
             video_path = vids[-1]
-        phase_slam(cfg, video_path)
+        _, log_unc, art_dir = phase_slam(cfg, video_path)
+        head, dist = analyze_exit_from_logs(cfg, log_unc, art_dir)
+        print(f"[RESULT] exit_heading_deg={head}  forward_cm={dist}")
         return
 
     if args.mission_only:
+        # uses config's exit_mission values
         phase_exit_flight(cfg)
         return
 
     # full pipeline
     video_path = phase_record(cfg)
-    phase_slam(cfg, video_path)
-    phase_exit_flight(cfg)
+    _, log_unc, art_dir = phase_slam(cfg, video_path)
+    head, dist = analyze_exit_from_logs(cfg, log_unc, art_dir)
+    phase_exit_flight(cfg, heading_override=head, forward_override=dist)
 
 
 if __name__ == "__main__":
