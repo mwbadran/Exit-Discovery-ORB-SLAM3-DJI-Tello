@@ -5,7 +5,6 @@ from datetime import datetime
 
 from djitellopy import Tello
 
-# your project modules
 from plot import *
 from ExitFinding import *
 from PointCloudCleaning import *
