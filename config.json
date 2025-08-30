@@ -1,46 +1,53 @@
 {
   "slam_exe": "C:\\ORB_SLAM3_Windows\\x64\\Release\\slam.exe",
   "vocab": "C:\\ORB_SLAM3_Windows\\Vocabulary\\ORBvoc.txt",
-  "settings": "C:\\ORB_SLAM3_Windows\\Examples\\Monocular\\telloCal.yaml",
+  "settings": "C:\\ORB_SLAM3_Windows\\Examples\\Monocular\\TUM1.yaml",
+
   "source": "video",
-  "tello_input_mode": "udp",
-  "tello_webcam_index": "0",
-  "webcam_index": "0",
   "video_path": "C:\\Users\\W10\\Desktop\\vidMAH.mp4",
+
   "speed": 30,
-  "height": 130,
+  "height": 70,
 
-  "extra_angle": 40.0,
-  "max_angle_wout_extra": 360.0,
-
-  "wsl_direct_udp": true,
-  "force_wsl_streamon": true,
-
+  "extra_angle": 0,
+  "max_angle_wout_extra": 360,
 
   "rotation_step_deg": 15,
   "rotation_pause_s": 0.7,
   "streamon_delay_sec": 5.0,
   "slam_start_wait_s": 20.0,
   "slam_exit_wait_s": 15.0,
+
   "do_nudge": false,
-  "nudge_cm": 20,
-  "nudge_every_steps": 1,
+  "nudge_cm": 15,
+  "nudge_every_steps": 2,
+
   "plots_dir": "DebugPlots",
   "telemetry_csv": "C:\\ORB_SLAM3_Windows\\log\\telemetry.csv",
+
   "voxel_size": 0.03,
   "nb_neighbors": 15,
   "std_ratio": 1.5,
   "thresh": 1.0,
   "avg_rect_scale": 1.2,
+
   "wsl_mode": true,
-  "wsl_distro_unc": "Ubuntu-20.04",
   "wsl_repo_dir": "/home/mwbadran/dev/ORB_SLAM3",
-  "wsl_slam_binary": "./Examples/Monocular/mono_tello",
+  "wsl_slam_binary_video": "./Examples/Monocular/mono_input",
   "wsl_vocab_rel": "Vocabulary/ORBvoc.txt",
   "wsl_settings_rel": "Examples/Monocular/TUM1.yaml",
-  "forward_port": 11111,
-  "wsl_unc_root": "\\\\wsl.localhost\\Ubuntu-20.04\\home\\mwbadran\\dev\\ORB_SLAM3",
+
+  "ffmpeg_bridge": true,
+  "forward_port_in": 11111,
+  "ffmpeg_in_port": 11113,
+  "wsl_udp_query": "overrun_nonfatal=1&fifo_size=5000000",
+
+  "bridge_mode": "avi",
+  "wsl_avi_path": "/tmp/slam.avi",
+  "wsl_fifo_path": "/tmp/slam.ts",
+  "wsl_http_port": 8090,
+  "wsl_http_path": "/stream.mjpg",
+
   "wsl_point_csv": "\\\\wsl.localhost\\Ubuntu-20.04\\home\\mwbadran\\dev\\ORB_SLAM3\\log\\pointData.csv",
-  "wsl_slam_binary_video": "./Examples/Monocular/mono_input",
-  "wsl_video_path": "/mnt/c/Users/W10/Desktop/orbVids/videoNEwZahiNig.mp4"
+  "wsl_video_path": "/mnt/c/Users/W10/Desktop/orbVids/vidKitchen.mp4"
 }
