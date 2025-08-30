@@ -104,45 +104,47 @@ def press_esc_to_slam_window():
 def close_slam(proc, input_arg, drone=None, wait_s=15.0):
     """
     Close ORB-SLAM3 cleanly:
-      - If input_arg == 'TELLO' (UDP): stop Tello stream to end SLAM main loop, then wait.
-      - Else (webcam/video): send ESC to the window, then wait.
-    Only if it *still* won't exit, terminate/kill as a last resort.
+      - For TELLO/UDP: ALWAYS streamoff() so mono_tello can exit its loop, then wait (if a proc was given).
+      - For webcam/video: try to press ESC and wait.
     """
-    if proc is None:
-        return
+    is_tello = str(input_arg).upper() == "TELLO"
 
-    # UDP (Tello) path → stop stream to end SLAM loop
-    if str(input_arg).upper() == "TELLO":
+    if is_tello:
         if drone is not None:
             try:
                 drone.streamoff()
             except Exception:
                 pass
-        try:
-            proc.wait(timeout=wait_s)
-            return
-        except subprocess.TimeoutExpired:
-            # Try ESC too, just in case a window is open
-            press_esc_to_slam_window()
+        # even if we don't have a usable proc (WSL wrapper), just sleep a little to let C++ exit
+        if proc is not None:
+            try:
+                proc.wait(timeout=wait_s)
+                return
+            except subprocess.TimeoutExpired:
+                pass
+        sleep(min(5.0, wait_s))
+        return
 
-    else:
-        # Webcam/video: trigger graceful exit with ESC
-        press_esc_to_slam_window()
+    # webcam/video path
+    press_esc_to_slam_window()
+    if proc is not None:
         try:
             proc.wait(timeout=wait_s)
             return
         except subprocess.TimeoutExpired:
             pass
 
-    # Gentle terminate, then kill if necessary
     try:
-        proc.terminate()
-        proc.wait(timeout=3.0)
+        if proc is not None:
+            proc.terminate()
+            proc.wait(timeout=3.0)
     except subprocess.TimeoutExpired:
         try:
-            proc.kill()
+            if proc is not None:
+                proc.kill()
         except Exception:
             pass
+
 
 # ---------- geometry / clustering ----------
 

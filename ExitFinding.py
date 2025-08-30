@@ -1,10 +1,11 @@
-import numpy as np
 from math import log2, floor
 from utils import distanceBetween2Points
 
-def getAverageRectangle(x, y, scale: float = 2.0):
-    cx = float(sum(x) / len(x)); cy = float(sum(y) / len(y))
+def getAverageRectangle(x, y):
+    cx = float(sum(x) / len(x))
+    cy = float(sum(y) / len(y))
     center = (cx, cy)
+
     leftX  = [(x[i], y[i]) for i in range(len(x)) if x[i] <  cx]
     rightX = [(x[i], y[i]) for i in range(len(x)) if x[i] >  cx]
     upY    = [(x[i], y[i]) for i in range(len(y)) if y[i] >  cy]
@@ -15,13 +16,12 @@ def getAverageRectangle(x, y, scale: float = 2.0):
     ud = [distanceBetween2Points(p, center) for p in upY]    or [0.0]
     dd = [distanceBetween2Points(p, center) for p in downY]  or [0.0]
 
-    xLeft  = cx - (scale * (sum(ld)/len(ld)))
-    xRight = cx + (scale * (sum(rd)/len(rd)))
-    yUp    = cy + (scale * (sum(ud)/len(ud)))
-    yDown  = cy - (scale * (sum(dd)/len(dd)))
+    xLeft  = cx - (2 * float(sum(ld) / len(ld)))
+    xRight = cx + (2 * float(sum(rd) / len(rd)))
+    yUp    = cy + (2 * float(sum(ud) / len(ud)))
+    yDown  = cy - (2 * float(sum(dd) / len(dd)))
 
     return (xLeft, yDown), (xRight, yDown), (xRight, yUp), (xLeft, yUp)
-
 
 # The rest retained for reference (unused by pipeline)
 def splitIntoSubarrays(array, k):
