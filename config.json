@@ -1,9 +1,9 @@
 {
   "drone": {
     "speed_cmps": 20,
-    "up_after_takeoff_cm": 50,
-    "yaw_step_deg": 15,
-    "yaw_pause_s": 1.5
+    "up_after_takeoff_cm": 70,
+    "yaw_step_deg": 10,
+    "yaw_pause_s": 0.5
   },
   "record": {
     "video_dir": "recordings",
@@ -12,7 +12,7 @@
     "ffmpeg_exe": "C:/ffmpeg/bin/ffmpeg.exe",
     "ffmpeg_copy": true,
     "max_fps": 30,
-    "input_url": "udp://0.0.0.0:11111",
+    "input_url": "udp://0.0.0.0:1111dfdf=1",
     "warmup_s": 2.0,
     "extra_hover_s": 0.0,
     "grace_s": 2.0

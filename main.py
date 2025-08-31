@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple, List
 
-# Third-party (optional for --slam-only)
+# optional for --slam-only
 try:
     from djitellopy import Tello
 except Exception:
@@ -21,7 +21,7 @@ from utils import (
     run,
     pretty_json,
     wsl_to_unc,
-    read_xyz_csv,              # NEW: simple CSV → x,y,z
+    read_xyz_csv,
     pointsOutOfBox,
     hierarchicalClustering,
     getClustersCenters,
@@ -80,7 +80,7 @@ def phase_record(cfg: dict) -> Path:
         copy_stream=bool(cfg["record"].get("ffmpeg_copy", True)),
     )
 
-    # flight script: takeoff → up → 360° in steps → optional hover → land
+    # flight script: takeoff -> up -> 360° in steps -> optional hover -> land
     try:
         try:
             tel.set_speed(int(cfg["drone"].get("speed_cmps", 10)))
@@ -136,7 +136,7 @@ def phase_slam(cfg: dict, video_path: Path) -> Tuple[List[str], str, Path]:
 
     # Inputs & paths
     video_wsl = to_wsl_path(str(video_path))
-    orb_root  = orb['root'].rstrip('/')                         # e.g. /home/USER/dev/ORB_SLAM3
+    orb_root  = orb['root'].rstrip('/') # e.g. /home/USER/dev/ORB_SLAM3
     exe       = orb.get('mono_input_exe', 'Examples/Monocular/mono_input')
     voc       = orb.get('vocabulary',   'Vocabulary/ORBvoc.txt')
     yaml      = orb.get('settings',     'Examples/Monocular/TUM1.yaml')
@@ -145,7 +145,7 @@ def phase_slam(cfg: dict, video_path: Path) -> Tuple[List[str], str, Path]:
 
     # Where to save plots on Windows
     outputs_base = Path(orb.get('outputs_dir', 'artifacts')).resolve()
-    plot_dir     = outputs_base / video_path.stem              # artifacts/tello_YYYYMMDD_HHMMSS
+    plot_dir = outputs_base / video_path.stem # artifacts/tello_YYYYMMDD_HHMMSS
     ensure_dirs(plot_dir)
 
     # 1) Run ORB-SLAM3
@@ -153,31 +153,17 @@ def phase_slam(cfg: dict, video_path: Path) -> Tuple[List[str], str, Path]:
     slam_cmd = f"cd '{orb_root}' && ./{exe} '{voc}' '{yaml}' '{video_wsl}'"
     rc = wsl_cmd(slam_cmd, passthrough=True)
 
-    # 2) List WSL log dir (debug)
-    # list_cmd = (
-    #     f"echo '[WSL] listing log dir: {log_wsl}'; "
-    #     f"if [ -d '{log_wsl}' ]; then "
-    #     f"  ls -lah --time-style=long-iso '{log_wsl}' || true; "
-    #     f"  echo '[WSL] preview first lines (if any):'; "
-    #     f"  shopt -s nullglob; "
-    #     f"  for f in {log_wsl}/*.csv {log_wsl}/*.txt; do "
-    #     f"    echo '---' \"$f\"; head -n 5 \"$f\"; "
-    #     f"  done; "
-    #     f"else echo '[WSL] log dir not found'; fi"
-    # )
-    # wsl_cmd(list_cmd, passthrough=True)
-
-    # 3) UNC path to WSL logs
+    # 2) UNC path to WSL logs
     distro = orb.get('wsl_distro', 'Ubuntu-20.04')
     log_unc = wsl_to_unc(log_wsl, distro=distro)
     print(f"[SLAM] logs UNC: {log_unc}")
 
-    # 4) Quick static plots (topdown + 3D) into plot_dir
+    # 3) Quick static plots (topdown + 3D) into plot_dir
     plot_paths = save_quick_plots_from_logs(source_dir=log_unc, out_dir=plot_dir)
     for p in plot_paths:
         print(f"[PLOT] saved -> {p}")
 
-    # 5) Error policy
+    # 4) Error policy
     if rc != 0 and orb.get('ignore_errors', True):
         print(f"[SLAM] non-zero exit ({rc}) ignored; plots saved to: {plot_dir}")
     elif rc != 0:
@@ -189,18 +175,18 @@ def phase_slam(cfg: dict, video_path: Path) -> Tuple[List[str], str, Path]:
 
 
 # --------------------------
-# Exit analysis (from WSL logs)  — ported from the ORB-SLAM2 pipeline
+# Exit analysis
 # --------------------------
 def analyze_exit_from_logs(cfg: dict, log_unc_dir: str, artifacts_dir: Path) -> Tuple[Optional[float], Optional[int]]:
     """
     1) Read pointData.csv (X,Y,Z)
     2) Clean with Statistical Outlier removal
     3) Compute room rectangle on (X, Z)
-    4) Cluster out-of-box points → centers = candidate exits
+    4) Cluster out-of-box points -> centers = candidate exits
     5) Return heading (deg CW) and forward distance (cm) for the furthest exit
-    Also saves a 'exit_detection.png' plot in artifacts_dir.
+    Also saves 'exit_detection.png' plot in artifacts_dir.
     """
-    # defaults (you can add these under cfg["exit_algo"] if you want)
+    # defaults
     ex = cfg.get("exit_algo", {})
     voxel_size  = float(ex.get("voxel_size", 0.02))
     nb_neighbors= int(ex.get("nb_neighbors", 20))
@@ -214,7 +200,7 @@ def analyze_exit_from_logs(cfg: dict, log_unc_dir: str, artifacts_dir: Path) -> 
         print(f"[EXIT] no points in {pts_file}; cannot compute exit.")
         return None, None
 
-    # Open3D clean (build PCD → remove statistical outliers)
+    # Open3D clean
     import open3d as o3d
     import numpy as np
 
@@ -232,7 +218,7 @@ def analyze_exit_from_logs(cfg: dict, log_unc_dir: str, artifacts_dir: Path) -> 
     inX = A[:, 0].tolist()
     inZ = A[:, 2].tolist()
 
-    # room rectangle & out-of-box clustering (like the ORB-SLAM2 code)
+    # room rectangle & out-of-box clustering
     room_box = getAverageRectangle(inX, inZ)
     xOut, zOut = pointsOutOfBox(inX, inZ, room_box)
     clusters = hierarchicalClustering(xOut, zOut, thresh=thresh)
@@ -259,9 +245,8 @@ def analyze_exit_from_logs(cfg: dict, log_unc_dir: str, artifacts_dir: Path) -> 
 
 def compute_exit_plan_from_centers(centers: List[Tuple[float, float]], cm_per_unit: float = 160.0) -> Tuple[float, int]:
     """
-    Matches the ORB-SLAM2 'moveToExit' angle/distance logic: pick furthest center and
+    angle/distance logic: pick furthest center and
     compute clockwise heading (deg) + forward distance (cm).
-    NOTE: preserves their trigonometry/quadrant logic for compatibility.
     """
     from math import degrees, tan
 
@@ -274,8 +259,7 @@ def compute_exit_plan_from_centers(centers: List[Tuple[float, float]], cm_per_un
             max_d = d
             fur = (x, z)
 
-    x, y = fur[0], fur[1]  # keep their naming (x,y) even though it's (X,Z)
-    # replicate original formula (they used tan() instead of atan/atan2)
+    x, y = fur[0], fur[1]  # (x,y) even though it's (X,Z)
     # angle base:
     base = 90 - int(degrees(tan(float(abs(y) / max(1e-9, abs(x))))))
     if x > 0 > y:
@@ -286,7 +270,7 @@ def compute_exit_plan_from_centers(centers: List[Tuple[float, float]], cm_per_un
         base += 270
     angle = float(base % 360)
 
-    # distance scale: 1 SLAM unit ≈ 160 cm
+    # distance scale: 1 SLAM unit =approx. 160 cm
     distance_cm = int(max_d * cm_per_unit)
     return angle, distance_cm
 
@@ -420,7 +404,7 @@ def save_quick_plots_from_logs(source_dir, out_dir) -> list:
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Record Tello video → run ORB-SLAM3 on it in WSL → compute exit → fly."
+        description="Record Tello video -> run ORB-SLAM3 on it in WSL -> compute exit -> fly."
     )
     ap.add_argument("--config", default=str(default_config_path()), help="Path to config.json")
     ap.add_argument("--record-only", action="store_true", help="Only record (no SLAM, no mission)")
