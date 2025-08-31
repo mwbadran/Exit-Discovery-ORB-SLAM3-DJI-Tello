@@ -1,6 +1,3 @@
-"""
-Point cloud cleaning (Open3D)
-"""
 import open3d as o3d
 
 def getInlierOutlier(pcd, ind):
