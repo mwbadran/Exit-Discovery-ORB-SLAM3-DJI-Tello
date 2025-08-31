@@ -1,9 +1,9 @@
 {
   "drone": {
-    "speed_cmps": 10,
-    "up_after_takeoff_cm": 70,
+    "speed_cmps": 20,
+    "up_after_takeoff_cm": 50,
     "yaw_step_deg": 15,
-    "yaw_pause_s": 0.2
+    "yaw_pause_s": 1.5
   },
   "record": {
     "video_dir": "recordings",
@@ -34,9 +34,9 @@
     "segment_cm": 50,
     "segment_pause_s": 0.3
   },
-  "watchdog": {
-  "idle_sec": 6.0,
-  "max_trackloss_lines": 80,
-  "hard_timeout_sec": 0
-}
+    "watchdog": {
+    "idle_sec": 6.0,
+    "max_trackloss_lines": 80,
+    "hard_timeout_sec": 0
+  }
 }
