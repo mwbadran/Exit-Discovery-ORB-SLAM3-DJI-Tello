@@ -1,5 +1,8 @@
 # Exit Discovery with ORB-SLAM3 on DJI Tello
-
+<img src="https://github.com/user-attachments/assets/93571101-b730-4c4a-a9a6-c42b8eb2599a"
+     alt="DJI Tello drone"
+     align="right"
+     width="260">
 Real-time room **exit discovery** using **DJI Tello** and **ORB-SLAM3**.
 
 **Authors:** Mohammed Badran, Mahmoud Watted 
@@ -246,6 +249,7 @@ python main.py
 * UZ-SLAMLab **ORB-SLAM3**
 * OBS / VirtualCam (used previously for Windows demos)
 * **Course:** Project in Real-Time Systems, Prof. Dan Feldman, University of Haifa (RBD Lab, Etgar Program)
+
 
 
 
